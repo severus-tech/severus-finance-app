@@ -8,6 +8,7 @@ public interface AppConfig {
 
     SingleUser singleUser();
     Jwt jwt();
+    Cookie cookie();
 
     interface SingleUser {
         @WithDefault("severus.technology@gmail.com")
@@ -20,5 +21,13 @@ public interface AppConfig {
     interface Jwt {
         @WithDefault("super_secret_jwt_key_at_least_32_bytes_long_severus_finance_2026")
         String secret();
+    }
+
+    interface Cookie {
+        @WithDefault("false")
+        boolean secure();
+
+        @WithDefault("LAX")
+        String sameSite();
     }
 }

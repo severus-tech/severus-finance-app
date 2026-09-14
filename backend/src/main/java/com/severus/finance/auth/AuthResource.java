@@ -15,7 +15,7 @@ import jakarta.ws.rs.core.Cookie;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.NewCookie;
 import jakarta.ws.rs.core.Response;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.severus.finance.configuration.AppConfig;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 
 import java.util.UUID;
@@ -34,12 +34,7 @@ public class AuthResource {
     JsonWebToken jwt;
 
     @Inject
-    @ConfigProperty(name = "app.cookie.secure", defaultValue = "false")
-    boolean cookieSecure;
-
-    @Inject
-    @ConfigProperty(name = "app.cookie.same-site", defaultValue = "LAX")
-    String cookieSameSite;
+    AppConfig appConfig;
 
     @POST
     @Path("/login")
@@ -111,14 +106,16 @@ public class AuthResource {
     }
 
     private NewCookie createRefreshCookie(String value, int maxAge) {
-        NewCookie.SameSite sameSite = "NONE".equalsIgnoreCase(cookieSameSite)
+        boolean secure = appConfig.cookie().secure();
+        String sameSiteStr = appConfig.cookie().sameSite();
+        NewCookie.SameSite sameSite = "NONE".equalsIgnoreCase(sameSiteStr)
                 ? NewCookie.SameSite.NONE
                 : NewCookie.SameSite.LAX;
         return new NewCookie.Builder(REFRESH_COOKIE_NAME)
                 .value(value)
                 .path("/api/v1/auth")
                 .maxAge(maxAge)
-                .secure(cookieSecure)
+                .secure(secure)
                 .httpOnly(true)
                 .sameSite(sameSite)
                 .build();
