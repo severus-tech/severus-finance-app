@@ -37,7 +37,15 @@ public class StartupInitializer {
         String passwordHash = BcryptUtil.bcryptHash(rawPassword, 12);
         userRepository.findByEmail(email).ifPresentOrElse(
             user -> {
-                LOG.info("User already exists in database. Skipping seed.");
+                if (!BcryptUtil.matches(rawPassword, user.getPasswordHash())) {
+                    LOG.info("Syncing single user password from environment configuration...");
+                    user.setPasswordHash(passwordHash);
+                    user.setUpdatedAt(java.time.Instant.now());
+                    userRepository.persist(user);
+                    LOG.info("Single user password updated successfully.");
+                } else {
+                    LOG.info("User already exists with matching credentials. Skipping seed.");
+                }
             },
             () -> {
                 LOG.infof("Seeding single user with email: %s", email);

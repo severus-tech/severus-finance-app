@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { AppSettings } from '@/types';
+import { useTheme } from '@/context/ThemeContext';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,6 +12,7 @@ import { toast } from 'sonner';
 
 export const SettingsPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const { theme } = useTheme();
 
   const [monthlySalary, setMonthlySalary] = useState('');
   const [salaryCreditDay, setSalaryCreditDay] = useState('1');
@@ -50,6 +52,7 @@ export const SettingsPage: React.FC = () => {
         displayName,
         currency: 'INR',
         timezone: 'Asia/Kolkata',
+        themePreference: settings?.themePreference || theme || 'DARK',
       });
 
       toast.success('App settings updated successfully!');
@@ -71,7 +74,7 @@ export const SettingsPage: React.FC = () => {
     setSavingPassword(true);
 
     try {
-      await api.put('/api/v1/auth/password', {
+      await api.post('/api/v1/auth/change-password', {
         currentPassword,
         newPassword,
       });

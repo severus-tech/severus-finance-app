@@ -40,10 +40,16 @@ public class AppSettingsService {
 
         settings.setMonthlySalary(CurrencyUtils.format(request.monthlySalary()));
         settings.setSalaryCreditDay(request.salaryCreditDay());
-        settings.setCurrency(request.currency());
-        settings.setTimezone(request.timezone());
+        if (request.currency() != null && !request.currency().isBlank()) {
+            settings.setCurrency(request.currency());
+        }
+        if (request.timezone() != null && !request.timezone().isBlank()) {
+            settings.setTimezone(request.timezone());
+        }
         settings.setDisplayName(request.displayName());
-        settings.setThemePreference(request.themePreference());
+        if (request.themePreference() != null && !request.themePreference().isBlank()) {
+            settings.setThemePreference(request.themePreference());
+        }
         settings.setUpdatedAt(Instant.now());
 
         return toResponse(settings);

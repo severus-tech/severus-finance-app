@@ -15,15 +15,12 @@ public record AppSettingsRequest(
     @Max(value = 31, message = "Salary credit day must be between 1 and 31")
     int salaryCreditDay,
 
-    @NotBlank(message = "Currency is required")
     String currency,
 
-    @NotBlank(message = "Timezone is required")
     String timezone,
 
     @NotBlank(message = "Display name is required")
     String displayName,
 
-    @NotBlank(message = "Theme preference is required")
     String themePreference
 ) {}
