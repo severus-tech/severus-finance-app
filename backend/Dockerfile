@@ -2,13 +2,15 @@
 FROM eclipse-temurin:21-jdk-alpine AS builder
 WORKDIR /workspace
 
+RUN apk add --no-cache maven
+
 COPY pom.xml .
 COPY .mvn .mvn
 COPY mvnw .
 COPY src src
 
 RUN chmod +x mvnw
-RUN ./mvnw package -DskipTests
+RUN ./mvnw package -Dmaven.test.skip=true
 
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre-alpine
