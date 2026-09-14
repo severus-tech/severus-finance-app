@@ -1,0 +1,60 @@
+package com.severus.finance.configuration;
+
+import com.severus.finance.settings.AppSettingsService;
+import com.severus.finance.user.User;
+import com.severus.finance.user.UserRepository;
+import io.quarkus.elytron.security.common.BcryptUtil;
+import io.quarkus.runtime.StartupEvent;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
+import org.jboss.logging.Logger;
+
+import java.util.UUID;
+
+@ApplicationScoped
+public class StartupInitializer {
+
+    private static final Logger LOG = Logger.getLogger(StartupInitializer.class);
+
+    @Inject
+    UserRepository userRepository;
+
+    @Inject
+    AppSettingsService appSettingsService;
+
+    @Inject
+    AppConfig appConfig;
+
+    @Transactional
+    public void onStartup(@Observes StartupEvent ev) {
+        LOG.info("Initializing Severus Finance application backend...");
+
+        String email = appConfig.singleUser().email().toLowerCase().trim();
+        String rawPassword = appConfig.singleUser().password();
+
+        String passwordHash = BcryptUtil.bcryptHash(rawPassword, 12);
+        userRepository.findByEmail(email).ifPresentOrElse(
+            user -> {
+                LOG.info("User already exists in database. Skipping seed.");
+            },
+            () -> {
+                LOG.infof("Seeding single user with email: %s", email);
+                UUID userId = UUID.randomUUID();
+                User user = new User(userId, email, passwordHash);
+                userRepository.persist(user);
+                appSettingsService.createDefaultSettings(userId);
+                LOG.info("Single user seeded successfully.");
+            }
+        );
+
+        LOG.info("\n=================================================\n" +
+                 "✅ Severus Finance Backend is RUNNING\n" +
+                 "API:      http://localhost:8080\n" +
+                 "Health:   http://localhost:8080/q/health\n" +
+                 "Database: PostgreSQL connected\n" +
+                 "Frontend: http://localhost:5173\n" +
+                 "=================================================");
+    }
+}

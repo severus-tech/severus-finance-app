@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: severus-finance-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    healthCheckPath: /q/health/ready
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: QUARKUS_PROFILE
+        value: prod
+      - key: SINGLE_USER_EMAIL
+        value: severus.technology@gmail.com
+      - key: SINGLE_USER_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false
+      - key: QUARKUS_DATASOURCE_JDBC_URL
+        sync: false
+      - key: QUARKUS_DATASOURCE_USERNAME
+        sync: false
+      - key: QUARKUS_DATASOURCE_PASSWORD
+        sync: false

@@ -1,0 +1,57 @@
+package com.severus.finance.loan.dto;
+
+import com.severus.finance.loan.enums.CalculationMode;
+import com.severus.finance.loan.enums.LoanType;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+public record CreateLoanRequest(
+    @NotBlank(message = "Loan name is required")
+    String name,
+
+    @NotBlank(message = "Lender or bank name is required")
+    String lenderOrBank,
+
+    @NotNull(message = "Loan type is required")
+    LoanType loanType,
+
+    String maskedAccountNumber,
+
+    @NotNull(message = "Original principal is required")
+    @Min(value = 1, message = "Original principal must be positive")
+    BigDecimal originalPrincipal,
+
+    BigDecimal currentOutstandingPrincipal,
+
+    @NotNull(message = "Annual interest rate is required")
+    @Min(value = 0, message = "Interest rate cannot be negative")
+    BigDecimal annualInterestRate,
+
+    @NotNull(message = "Start date is required")
+    LocalDate startDate,
+
+    @NotNull(message = "First EMI date is required")
+    LocalDate firstEmiDate,
+
+    @Min(value = 1, message = "EMI due day must be between 1 and 31")
+    @Max(value = 31, message = "EMI due day must be between 1 and 31")
+    int emiDueDay,
+
+    @NotNull(message = "EMI amount is required")
+    @Min(value = 1, message = "EMI amount must be positive")
+    BigDecimal emiAmount,
+
+    @Min(value = 1, message = "Tenure in months must be at least 1")
+    int originalTenureMonths,
+
+    CalculationMode calculationMode,
+
+    Boolean manualOverride,
+
+    String notes
+) {}
