@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { formatINR, formatDate, cn } from '@/lib/utils';
-import { computeLoanMetrics } from '@/lib/loanUtils';
+import { computeLoanMetrics, calculateExpectedEndDate, calculateTenureMonths } from '@/lib/loanUtils';
 import {
   Landmark,
   Plus,
@@ -43,10 +43,15 @@ export const LoansPage: React.FC = () => {
   const [origPrincipal, setOrigPrincipal] = useState('');
   const [currentPrincipal, setCurrentPrincipal] = useState('');
   const [interestRate, setInterestRate] = useState('9.5');
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const initialStartDate = new Date().toISOString().split('T')[0];
+  const [startDate, setStartDate] = useState(initialStartDate);
   const [emiDueDay, setEmiDueDay] = useState(new Date().getDate().toString());
   const [emiAmount, setEmiAmount] = useState('');
   const [tenureMonths, setTenureMonths] = useState('60');
+  const [endDate, setEndDate] = useState(
+    calculateExpectedEndDate(initialStartDate, 60, new Date().getDate())
+  );
+  const [autoMarkPastPaid, setAutoMarkPastPaid] = useState(true);
 
   const { data: loans, isLoading } = useQuery<Loan[]>({
     queryKey: ['loans', filterStatus],
@@ -74,16 +79,18 @@ export const LoansPage: React.FC = () => {
         name,
         lenderOrBank: lender,
         loanType,
-        maskedAccountNumber: maskedAccount,
+        maskedAccountNumber: maskedAccount || undefined,
         originalPrincipal: parseFloat(origPrincipal),
         currentOutstandingPrincipal: currentPrincipal ? parseFloat(currentPrincipal) : undefined,
         annualInterestRate: parseFloat(interestRate),
         startDate,
         firstEmiDate: startDate,
-        emiDueDay: parseInt(emiDueDay),
+        endDate: endDate || undefined,
+        emiDueDay: parseInt(emiDueDay, 10),
         emiAmount: parseFloat(emiAmount),
-        originalTenureMonths: parseInt(tenureMonths),
+        originalTenureMonths: parseInt(tenureMonths, 10),
         calculationMode: 'REDUCING_BALANCE',
+        autoMarkPastEmisPaid: autoMarkPastPaid,
       });
 
       toast.success('Loan created and amortization schedule generated!');
@@ -262,12 +269,12 @@ export const LoansPage: React.FC = () => {
                     </div>
 
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Total Loan Balance</span>
+                      <span className="text-slate-400 block mb-0.5">Remaining Loan Amount</span>
                       <span className="text-base font-black text-amber-300">
                         {formatINR(metrics.totalLoanBalance)}
                       </span>
                       <span className="text-[10px] text-slate-400 block mt-0.5">
-                        EMI × {metrics.remainingEmis} remaining
+                        {metrics.remainingEmis} EMIs × {formatINR(metrics.emiAmount)}
                       </span>
                     </div>
 
@@ -277,12 +284,12 @@ export const LoansPage: React.FC = () => {
                         {formatINR(metrics.emiAmount)}
                       </span>
                       <span className="text-[10px] text-slate-400 block mt-0.5">
-                        Due {loan.emiDueDay}th of month
+                        Due {loan.emiDueDay}th • Next: {metrics.nextEmiDate ? formatDate(metrics.nextEmiDate) : 'Completed'}
                       </span>
                     </div>
 
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Last EMI Date</span>
+                      <span className="text-slate-400 block mb-0.5">Expected End Date</span>
                       <span className="text-sm font-bold text-slate-200">
                         {metrics.lastEmiDate ? formatDate(metrics.lastEmiDate) : 'TBD'}
                       </span>
@@ -357,13 +364,12 @@ export const LoansPage: React.FC = () => {
             <Input label="Current Outstanding Principal (₹)" type="number" step="0.01" value={currentPrincipal} onChange={(e) => setCurrentPrincipal(e.target.value)} placeholder="Leave blank if new loan" />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="Interest Rate (% p.a.)" type="number" step="0.01" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} required />
             <Input label="Monthly EMI (₹)" type="number" step="0.01" value={emiAmount} onChange={(e) => setEmiAmount(e.target.value)} required placeholder="10500" />
-            <Input label="Tenure (Months)" type="number" value={tenureMonths} onChange={(e) => setTenureMonths(e.target.value)} required />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Input
               label="Loan Start Date"
               type="date"
@@ -372,15 +378,80 @@ export const LoansPage: React.FC = () => {
                 const val = e.target.value;
                 setStartDate(val);
                 if (val) {
-                  const day = new Date(val).getDate();
+                  const day = parseInt(val.split('-')[2], 10);
                   if (!isNaN(day)) {
                     setEmiDueDay(day.toString());
+                  }
+                  const t = parseInt(tenureMonths, 10);
+                  if (t > 0) {
+                    setEndDate(calculateExpectedEndDate(val, t, isNaN(day) ? 5 : day));
                   }
                 }
               }}
               required
             />
-            <Input label="EMI Due Day of Month" type="number" min="1" max="31" value={emiDueDay} onChange={(e) => setEmiDueDay(e.target.value)} required />
+            <Input
+              label="Tenure (Months)"
+              type="number"
+              min="1"
+              value={tenureMonths}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTenureMonths(val);
+                const t = parseInt(val, 10);
+                const day = parseInt(emiDueDay, 10) || 5;
+                if (startDate && t > 0) {
+                  setEndDate(calculateExpectedEndDate(startDate, t, day));
+                }
+              }}
+              required
+            />
+            <Input
+              label="Expected End Date"
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEndDate(val);
+                if (startDate && val) {
+                  const implied = calculateTenureMonths(startDate, val);
+                  if (implied > 0) {
+                    setTenureMonths(implied.toString());
+                  }
+                }
+              }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+            <Input
+              label="EMI Due Day of Month"
+              type="number"
+              min="1"
+              max="31"
+              value={emiDueDay}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEmiDueDay(val);
+                const day = parseInt(val, 10);
+                const t = parseInt(tenureMonths, 10);
+                if (startDate && t > 0 && day > 0) {
+                  setEndDate(calculateExpectedEndDate(startDate, t, day));
+                }
+              }}
+              required
+            />
+            <div className="pt-2 sm:pt-6">
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autoMarkPastPaid}
+                  onChange={(e) => setAutoMarkPastPaid(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-purple-600 focus:ring-purple-500"
+                />
+                <span>Automatically mark past EMIs before today as paid</span>
+              </label>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-purple-900/20">

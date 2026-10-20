@@ -20,6 +20,32 @@ public class DateUtils {
         return LocalDate.of(year, month, validDay);
     }
 
+    public static LocalDate calculateInstallmentDueDate(LocalDate firstEmiDate, int emiDueDay, int installmentNumber) {
+        if (firstEmiDate == null || installmentNumber <= 1) {
+            return firstEmiDate;
+        }
+        YearMonth ym = YearMonth.from(firstEmiDate).plusMonths(installmentNumber - 1);
+        return resolveDueDate(ym.getYear(), ym.getMonthValue(), emiDueDay);
+    }
+
+    public static LocalDate calculateExpectedEndDate(LocalDate firstEmiDate, int emiDueDay, int totalEmiCount) {
+        if (firstEmiDate == null || totalEmiCount <= 0) {
+            return firstEmiDate;
+        }
+        return calculateInstallmentDueDate(firstEmiDate, emiDueDay, totalEmiCount);
+    }
+
+    public static int calculateImpliedTenure(LocalDate firstEmiDate, LocalDate targetEndDate) {
+        if (targetEndDate == null || firstEmiDate == null || targetEndDate.isBefore(firstEmiDate)) {
+            return 1;
+        }
+        long monthsBetween = java.time.temporal.ChronoUnit.MONTHS.between(
+                YearMonth.from(firstEmiDate),
+                YearMonth.from(targetEndDate)
+        );
+        return Math.max(1, (int) monthsBetween + 1);
+    }
+
     public static SalaryCycle calculateSalaryCycle(LocalDate asOfDate, int salaryCreditDay) {
         LocalDate today = asOfDate != null ? asOfDate : todayInKolkata();
 

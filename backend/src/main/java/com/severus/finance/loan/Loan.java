@@ -50,6 +50,9 @@ public class Loan {
     @Column(name = "first_emi_date", nullable = false)
     private LocalDate firstEmiDate;
 
+    @Column(name = "end_date")
+    private LocalDate endDate;
+
     @Column(name = "emi_due_day", nullable = false)
     private int emiDueDay;
 
@@ -174,6 +177,14 @@ public class Loan {
 
     public void setFirstEmiDate(LocalDate firstEmiDate) {
         this.firstEmiDate = firstEmiDate;
+    }
+
+    public LocalDate getEndDate() {
+        return endDate;
+    }
+
+    public void setEndDate(LocalDate endDate) {
+        this.endDate = endDate;
     }
 
     public int getEmiDueDay() {

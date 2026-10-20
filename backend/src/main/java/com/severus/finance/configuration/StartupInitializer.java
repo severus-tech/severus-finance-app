@@ -1,5 +1,6 @@
 package com.severus.finance.configuration;
 
+import com.severus.finance.loan.LoanService;
 import com.severus.finance.settings.AppSettingsService;
 import com.severus.finance.user.User;
 import com.severus.finance.user.UserRepository;
@@ -24,6 +25,9 @@ public class StartupInitializer {
 
     @Inject
     AppSettingsService appSettingsService;
+
+    @Inject
+    LoanService loanService;
 
     @Inject
     AppConfig appConfig;
@@ -61,6 +65,14 @@ public class StartupInitializer {
                 LOG.info("Single user seeded successfully.");
             }
         );
+
+        LOG.info("Reconciling loan schedules to ensure full tenure preservation...");
+        try {
+            loanService.reconcileAllLoans();
+            LOG.info("Loan schedule reconciliation completed.");
+        } catch (Exception e) {
+            LOG.error("Failed to run loan schedule reconciliation on startup", e);
+        }
 
         LOG.infof("\n=================================================\n" +
                  "✅ Severus Finance Backend is RUNNING\n" +

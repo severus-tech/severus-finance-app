@@ -13,17 +13,18 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.core.Response;
+import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @ApplicationScoped
 public class LoanService {
+
+    private static final Logger LOG = Logger.getLogger(LoanService.class);
 
     private final LoanRepository loanRepository;
     private final LoanInstallmentRepository installmentRepository;
@@ -53,6 +54,14 @@ public class LoanService {
     public LoanResponse getLoanDetails(UUID id, UUID userId) {
         Loan loan = loanRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ApiException(Response.Status.NOT_FOUND, "LOAN_NOT_FOUND", "Loan not found"));
+
+        // Safe auto-repair: if existing stored installments are incomplete, reconcile with authoritative tenure
+        List<LoanInstallment> existing = installmentRepository.findByLoanId(loan.getId());
+        if (existing.size() < loan.getTotalEmiCount()) {
+            LOG.infof("Loan %s has incomplete schedule (%d of %d). Reconciling to full tenure...",
+                    loan.getId(), existing.size(), loan.getTotalEmiCount());
+            reconcileSchedule(loan);
+        }
 
         return toLoanResponseWithSchedule(loan);
     }
@@ -88,8 +97,14 @@ public class LoanService {
         BigDecimal emi = CurrencyUtils.format(request.emiAmount());
         loan.setEmiAmount(emi);
 
-        loan.setOriginalTenureMonths(request.originalTenureMonths());
-        loan.setTotalEmiCount(request.originalTenureMonths());
+        int tenure = request.originalTenureMonths() > 0 ? request.originalTenureMonths() : 1;
+        loan.setOriginalTenureMonths(tenure);
+        loan.setTotalEmiCount(tenure);
+
+        LocalDate expectedEndDate = request.endDate() != null ? request.endDate() :
+                DateUtils.calculateExpectedEndDate(firstEmiDate, request.emiDueDay(), tenure);
+        loan.setEndDate(expectedEndDate);
+
         loan.setCalculationMode(request.calculationMode() != null ? request.calculationMode() : CalculationMode.REDUCING_BALANCE);
         loan.setStatus(LoanStatus.ACTIVE);
         loan.setNotes(request.notes());
@@ -98,7 +113,9 @@ public class LoanService {
 
         loanRepository.persist(loan);
 
-        generateSchedule(loan, origPrincipal, 1, firstEmiDate, request.originalTenureMonths(), true);
+        boolean autoMarkPastPaid = request.autoMarkPastEmisPaid() == null || Boolean.TRUE.equals(request.autoMarkPastEmisPaid());
+        // Generate full fixed schedule of exactly `tenure` installments. Never stops early.
+        generateSchedule(loan, origPrincipal, 1, firstEmiDate, tenure, autoMarkPastPaid);
 
         return toLoanResponseWithSchedule(loan);
     }
@@ -115,9 +132,11 @@ public class LoanService {
         }
         loan.setMaskedAccountNumber(request.maskedAccountNumber());
         loan.setAnnualInterestRate(request.annualInterestRate());
-        loan.setEmiDueDay(request.emiDueDay());
-        loan.setEmiAmount(CurrencyUtils.format(request.emiAmount()));
         loan.setNotes(request.notes());
+
+        if (request.originalPrincipal() != null) {
+            loan.setOriginalPrincipal(CurrencyUtils.format(request.originalPrincipal()));
+        }
 
         if (request.status() != null) {
             loan.setStatus(request.status());
@@ -126,12 +145,46 @@ public class LoanService {
         if (Boolean.TRUE.equals(request.manualOverride()) && request.currentOutstandingPrincipal() != null) {
             loan.setOutstandingPrincipalManualOverride(true);
             loan.setCurrentOutstandingPrincipal(CurrencyUtils.format(request.currentOutstandingPrincipal()));
-        } else if (request.manualOverride() != null) {
-            loan.setOutstandingPrincipalManualOverride(request.manualOverride());
+        } else if (request.currentOutstandingPrincipal() != null) {
+            loan.setCurrentOutstandingPrincipal(CurrencyUtils.format(request.currentOutstandingPrincipal()));
         }
 
-        if (Boolean.TRUE.equals(request.recalculateFutureSchedule())) {
-            recalculateFutureInstallments(loan);
+        boolean scheduleAttributesChanged = false;
+
+        if (request.emiDueDay() > 0 && request.emiDueDay() != loan.getEmiDueDay()) {
+            loan.setEmiDueDay(request.emiDueDay());
+            scheduleAttributesChanged = true;
+        }
+
+        if (request.emiAmount() != null) {
+            BigDecimal newEmi = CurrencyUtils.format(request.emiAmount());
+            if (newEmi.compareTo(loan.getEmiAmount()) != 0) {
+                loan.setEmiAmount(newEmi);
+                scheduleAttributesChanged = true;
+            }
+        }
+
+        if (request.startDate() != null) {
+            loan.setStartDate(request.startDate());
+        }
+
+        if (request.firstEmiDate() != null && !request.firstEmiDate().isEqual(loan.getFirstEmiDate())) {
+            loan.setFirstEmiDate(request.firstEmiDate());
+            scheduleAttributesChanged = true;
+        }
+
+        if (request.originalTenureMonths() != null && request.originalTenureMonths() > 0 && request.originalTenureMonths() != loan.getTotalEmiCount()) {
+            loan.setOriginalTenureMonths(request.originalTenureMonths());
+            loan.setTotalEmiCount(request.originalTenureMonths());
+            scheduleAttributesChanged = true;
+        }
+
+        LocalDate expectedEndDate = DateUtils.calculateExpectedEndDate(loan.getFirstEmiDate(), loan.getEmiDueDay(), loan.getTotalEmiCount());
+        loan.setEndDate(expectedEndDate);
+
+        // Reconcile schedule if dates, tenure, or due day changed, or explicit recalculation requested
+        if (scheduleAttributesChanged || Boolean.TRUE.equals(request.recalculateFutureSchedule())) {
+            reconcileSchedule(loan);
         }
 
         loan.setUpdatedAt(Instant.now());
@@ -172,10 +225,6 @@ public class LoanService {
                 updatedPrincipal = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
             }
             loan.setCurrentOutstandingPrincipal(updatedPrincipal);
-
-            if (updatedPrincipal.compareTo(BigDecimal.ZERO) == 0) {
-                loan.setStatus(LoanStatus.CLOSED);
-            }
         }
         loan.setUpdatedAt(Instant.now());
 
@@ -196,20 +245,16 @@ public class LoanService {
 
         installment.setPaymentState(PaymentState.UNPAID);
         installment.setPaidDate(null);
+        installment.setActualPaidAmount(null);
+        installment.setUpdatedAt(Instant.now());
 
         if (!loan.isOutstandingPrincipalManualOverride()) {
             BigDecimal principalReinstated = installment.getPrincipalComponent();
             BigDecimal updatedPrincipal = CurrencyUtils.add(loan.getCurrentOutstandingPrincipal(), principalReinstated);
             loan.setCurrentOutstandingPrincipal(updatedPrincipal);
-            if (loan.getStatus() == LoanStatus.CLOSED && updatedPrincipal.compareTo(BigDecimal.ZERO) > 0) {
-                loan.setStatus(LoanStatus.ACTIVE);
-            }
         }
 
-        installment.setActualPaidAmount(null);
-        installment.setUpdatedAt(Instant.now());
         loan.setUpdatedAt(Instant.now());
-
         return toLoanResponseWithSchedule(loan);
     }
 
@@ -226,13 +271,9 @@ public class LoanService {
         BigDecimal newOutstanding = CurrencyUtils.subtract(loan.getCurrentOutstandingPrincipal(), prepayAmount);
         loan.setCurrentOutstandingPrincipal(newOutstanding);
 
-        if (newOutstanding.compareTo(BigDecimal.ZERO) == 0) {
-            loan.setStatus(LoanStatus.CLOSED);
-            installmentRepository.deleteUnpaidFutureInstallments(loanId);
-        } else {
-            recalculateFutureInstallments(loan);
-        }
-
+        // In compliance with Rule A and Scenario 9:
+        // A principal prepayment does NOT reduce tenure, does NOT delete future installments,
+        // and does NOT alter the original fixed schedule.
         loan.setUpdatedAt(Instant.now());
         return toLoanResponseWithSchedule(loan);
     }
@@ -242,17 +283,19 @@ public class LoanService {
         Loan loan = loanRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ApiException(Response.Status.NOT_FOUND, "LOAN_NOT_FOUND", "Loan not found"));
 
+        // Delete all associated installments first to maintain database referential integrity
         installmentRepository.delete("loan.id = ?1", id);
         loanRepository.delete(loan);
     }
 
     @Transactional
     public LoanSummaryResponse getLoanSummary(UUID userId) {
+        LocalDate today = DateUtils.todayInKolkata();
         List<Loan> activeLoans = loanRepository.findByUserIdAndStatus(userId, LoanStatus.ACTIVE);
 
         BigDecimal totalOriginalPrincipal = BigDecimal.ZERO;
         BigDecimal totalOutstandingPrincipal = BigDecimal.ZERO;
-        BigDecimal totalRemainingRepayment = BigDecimal.ZERO;
+        BigDecimal totalRemainingLoanAmount = BigDecimal.ZERO;
         BigDecimal totalMonthlyEmi = BigDecimal.ZERO;
         int totalPaidEmiCount = 0;
         int totalRemainingEmiCount = 0;
@@ -260,29 +303,34 @@ public class LoanService {
         for (Loan loan : activeLoans) {
             totalOriginalPrincipal = totalOriginalPrincipal.add(loan.getOriginalPrincipal());
             totalOutstandingPrincipal = totalOutstandingPrincipal.add(loan.getCurrentOutstandingPrincipal());
-            totalMonthlyEmi = totalMonthlyEmi.add(loan.getEmiAmount());
 
             List<LoanInstallment> installments = installmentRepository.findByLoanId(loan.getId());
+            int elapsedCount = 0;
             for (LoanInstallment inst : installments) {
+                if (!inst.getDueDate().isAfter(today)) {
+                    elapsedCount++;
+                }
                 if (inst.getPaymentState() == PaymentState.PAID) {
                     totalPaidEmiCount++;
-                } else if (inst.getPaymentState() == PaymentState.UNPAID) {
-                    totalRemainingEmiCount++;
-                    totalRemainingRepayment = totalRemainingRepayment.add(inst.getScheduledAmount());
                 }
             }
-        }
 
-        BigDecimal totalEstimatedRemainingInterest = CurrencyUtils.subtract(totalRemainingRepayment, totalOutstandingPrincipal);
-        if (totalEstimatedRemainingInterest.compareTo(BigDecimal.ZERO) < 0) {
-            totalEstimatedRemainingInterest = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+            int totalEmis = loan.getTotalEmiCount();
+            int remainingEmis = Math.max(0, totalEmis - Math.min(totalEmis, elapsedCount));
+
+            if (remainingEmis > 0) {
+                totalMonthlyEmi = totalMonthlyEmi.add(loan.getEmiAmount());
+                BigDecimal loanRemainingCommitment = loan.getEmiAmount().multiply(BigDecimal.valueOf(remainingEmis));
+                totalRemainingLoanAmount = totalRemainingLoanAmount.add(loanRemainingCommitment);
+                totalRemainingEmiCount += remainingEmis;
+            }
         }
 
         return new LoanSummaryResponse(
                 CurrencyUtils.format(totalOriginalPrincipal),
                 CurrencyUtils.format(totalOutstandingPrincipal),
-                CurrencyUtils.format(totalRemainingRepayment),
-                CurrencyUtils.format(totalEstimatedRemainingInterest),
+                CurrencyUtils.format(totalRemainingLoanAmount),
+                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN),
                 CurrencyUtils.format(totalMonthlyEmi),
                 activeLoans.size(),
                 totalPaidEmiCount,
@@ -290,17 +338,22 @@ public class LoanService {
         );
     }
 
-    private void generateSchedule(Loan loan, BigDecimal principal, int startNumber, LocalDate firstDueDate, int count, boolean autoMarkPastPaid) {
+    /**
+     * Generates a fixed amortization schedule containing exactly `count` installments.
+     * Guaranteed to never stop early when calculated principal balance reaches zero.
+     */
+    private void generateSchedule(Loan loan, BigDecimal principal, int startNumber, LocalDate firstDueDate, int count, boolean markPastPaid) {
         BigDecimal monthlyRate = loan.getAnnualInterestRate()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_EVEN)
                 .divide(BigDecimal.valueOf(12), 10, RoundingMode.HALF_EVEN);
 
         BigDecimal currentPrincipal = principal;
-        LocalDate currentDueDate = firstDueDate;
-        LocalDate today = LocalDate.now();
+        LocalDate today = DateUtils.todayInKolkata();
+        BigDecimal lastRemainingPrincipal = principal;
 
         for (int i = 0; i < count; i++) {
             int installmentNumber = startNumber + i;
+            LocalDate currentDueDate = DateUtils.calculateInstallmentDueDate(firstDueDate, loan.getEmiDueDay(), installmentNumber);
 
             BigDecimal interestComponent = currentPrincipal.multiply(monthlyRate).setScale(2, RoundingMode.HALF_EVEN);
             BigDecimal principalComponent = CurrencyUtils.subtract(loan.getEmiAmount(), interestComponent);
@@ -309,12 +362,16 @@ public class LoanService {
                 principalComponent = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
             }
 
-            if (i == count - 1 || principalComponent.compareTo(currentPrincipal) >= 0) {
+            if (principalComponent.compareTo(currentPrincipal) >= 0) {
                 principalComponent = currentPrincipal;
             }
 
-            BigDecimal scheduledAmount = CurrencyUtils.add(principalComponent, interestComponent);
+            // Fixed EMI amount is always loan.getEmiAmount()
+            BigDecimal scheduledAmount = loan.getEmiAmount();
             currentPrincipal = CurrencyUtils.subtract(currentPrincipal, principalComponent);
+            if (currentPrincipal.compareTo(BigDecimal.ZERO) < 0) {
+                currentPrincipal = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+            }
 
             LoanInstallment installment = new LoanInstallment();
             installment.setId(UUID.randomUUID());
@@ -325,18 +382,11 @@ public class LoanService {
             installment.setPrincipalComponent(principalComponent);
             installment.setInterestComponent(interestComponent);
 
-            if (autoMarkPastPaid && currentDueDate.isBefore(today)) {
+            if (markPastPaid && currentDueDate.isBefore(today)) {
                 installment.setPaymentState(PaymentState.PAID);
                 installment.setPaidDate(currentDueDate);
                 installment.setActualPaidAmount(scheduledAmount);
-
-                if (!loan.isOutstandingPrincipalManualOverride()) {
-                    BigDecimal updatedPrincipal = CurrencyUtils.subtract(loan.getCurrentOutstandingPrincipal(), principalComponent);
-                    if (updatedPrincipal.compareTo(BigDecimal.ZERO) < 0) {
-                        updatedPrincipal = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
-                    }
-                    loan.setCurrentOutstandingPrincipal(updatedPrincipal);
-                }
+                lastRemainingPrincipal = currentPrincipal;
             } else {
                 installment.setPaymentState(PaymentState.UNPAID);
             }
@@ -345,71 +395,179 @@ public class LoanService {
             installment.setUpdatedAt(Instant.now());
 
             installmentRepository.persist(installment);
-
-            // Compute next due date considering month lengths & emiDueDay
-            LocalDate nextMonth = currentDueDate.plusMonths(1);
-            currentDueDate = DateUtils.resolveDueDate(nextMonth.getYear(), nextMonth.getMonthValue(), loan.getEmiDueDay());
-
-            if (currentPrincipal.compareTo(BigDecimal.ZERO) <= 0) {
-                break;
-            }
+            // Notice: NEVER breaks early, guarantees all `count` installments are stored.
         }
 
-        if (loan.getCurrentOutstandingPrincipal().compareTo(BigDecimal.ZERO) <= 0) {
-            loan.setCurrentOutstandingPrincipal(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN));
-            loan.setStatus(LoanStatus.CLOSED);
+        if (markPastPaid && !loan.isOutstandingPrincipalManualOverride()) {
+            loan.setCurrentOutstandingPrincipal(lastRemainingPrincipal);
+            loanRepository.persist(loan);
         }
     }
 
-    private void recalculateFutureInstallments(Loan loan) {
-        List<LoanInstallment> unpaid = installmentRepository.findUnpaidByLoanId(loan.getId());
-        if (unpaid.isEmpty()) {
-            return;
+    /**
+     * Reconciles a loan's installments against its authoritative tenure and dates.
+     * Preserves payment history, actual paid amounts, paid dates, and notes.
+     * Restores missing future or overdue installments without creating duplicates.
+     */
+    @Transactional
+    public void reconcileSchedule(Loan loan) {
+        int targetCount = loan.getTotalEmiCount() > 0 ? loan.getTotalEmiCount() : 1;
+        List<LoanInstallment> existing = installmentRepository.findByLoanId(loan.getId());
+
+        Map<Integer, LoanInstallment> existingMap = new HashMap<>();
+        for (LoanInstallment inst : existing) {
+            existingMap.put(inst.getInstallmentNumber(), inst);
         }
 
-        installmentRepository.deleteUnpaidFutureInstallments(loan.getId());
+        BigDecimal monthlyRate = loan.getAnnualInterestRate()
+                .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_EVEN)
+                .divide(BigDecimal.valueOf(12), 10, RoundingMode.HALF_EVEN);
+        BigDecimal currentPrincipal = loan.getOriginalPrincipal();
 
-        int startNumber = unpaid.getFirst().getInstallmentNumber();
-        LocalDate firstDueDate = unpaid.getFirst().getDueDate();
-        int remainingCount = unpaid.size();
+        for (int num = 1; num <= targetCount; num++) {
+            LocalDate expectedDueDate = DateUtils.calculateInstallmentDueDate(loan.getFirstEmiDate(), loan.getEmiDueDay(), num);
 
-        generateSchedule(loan, loan.getCurrentOutstandingPrincipal(), startNumber, firstDueDate, remainingCount, false);
+            BigDecimal interestComponent = currentPrincipal.multiply(monthlyRate).setScale(2, RoundingMode.HALF_EVEN);
+            BigDecimal principalComponent = CurrencyUtils.subtract(loan.getEmiAmount(), interestComponent);
+            if (principalComponent.compareTo(BigDecimal.ZERO) < 0) {
+                principalComponent = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+            }
+            if (principalComponent.compareTo(currentPrincipal) >= 0) {
+                principalComponent = currentPrincipal;
+            }
+            currentPrincipal = CurrencyUtils.subtract(currentPrincipal, principalComponent);
+            if (currentPrincipal.compareTo(BigDecimal.ZERO) < 0) {
+                currentPrincipal = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+            }
+
+            if (existingMap.containsKey(num)) {
+                LoanInstallment inst = existingMap.get(num);
+                inst.setDueDate(expectedDueDate);
+                inst.setScheduledAmount(loan.getEmiAmount());
+                inst.setPrincipalComponent(principalComponent);
+                inst.setInterestComponent(interestComponent);
+                inst.setUpdatedAt(Instant.now());
+                installmentRepository.persist(inst);
+            } else {
+                LoanInstallment newInst = new LoanInstallment();
+                newInst.setId(UUID.randomUUID());
+                newInst.setLoan(loan);
+                newInst.setInstallmentNumber(num);
+                newInst.setDueDate(expectedDueDate);
+                newInst.setScheduledAmount(loan.getEmiAmount());
+                newInst.setPrincipalComponent(principalComponent);
+                newInst.setInterestComponent(interestComponent);
+                newInst.setPaymentState(PaymentState.UNPAID);
+                newInst.setCreatedAt(Instant.now());
+                newInst.setUpdatedAt(Instant.now());
+                installmentRepository.persist(newInst);
+            }
+        }
+
+        // Delete excess UNPAID installments if tenure was reduced
+        for (LoanInstallment inst : existing) {
+            if (inst.getInstallmentNumber() > targetCount && inst.getPaymentState() != PaymentState.PAID) {
+                installmentRepository.delete(inst);
+            }
+        }
+
+        LocalDate expectedEndDate = DateUtils.calculateExpectedEndDate(loan.getFirstEmiDate(), loan.getEmiDueDay(), targetCount);
+        loan.setEndDate(expectedEndDate);
+        loanRepository.persist(loan);
+    }
+
+    /**
+     * Bulk reconciliation utility for system maintenance / boot reconciliation.
+     */
+    @Transactional
+    public void reconcileAllLoans() {
+        List<Loan> allLoans = loanRepository.listAll();
+        for (Loan loan : allLoans) {
+            try {
+                reconcileSchedule(loan);
+            } catch (Exception e) {
+                LOG.errorf(e, "Error reconciling loan %s", loan.getId());
+            }
+        }
     }
 
     public LoanResponse toLoanResponseWithSchedule(Loan loan) {
+        LocalDate today = DateUtils.todayInKolkata();
         List<LoanInstallment> installments = installmentRepository.findByLoanId(loan.getId());
-        List<LoanInstallmentResponse> instResponses = installments.stream()
-                .map(i -> new LoanInstallmentResponse(
-                        i.getId(),
-                        i.getLoan().getId(),
-                        i.getInstallmentNumber(),
-                        i.getDueDate(),
-                        i.getScheduledAmount(),
-                        i.getPrincipalComponent(),
-                        i.getInterestComponent(),
-                        i.getPaymentState(),
-                        i.getPaidDate(),
-                        i.getActualPaidAmount(),
-                        i.getNotes(),
-                        i.getVersion(),
-                        i.getCreatedAt(),
-                        i.getUpdatedAt()
-                )).toList();
 
-        BigDecimal remainingRepayment = BigDecimal.ZERO;
-        int paidCount = 0;
-        int remainingCount = 0;
+        int totalEmiCount = loan.getTotalEmiCount() > 0 ? loan.getTotalEmiCount() :
+                (loan.getOriginalTenureMonths() > 0 ? loan.getOriginalTenureMonths() : Math.max(1, installments.size()));
 
-        for (LoanInstallment inst : installments) {
-            if (inst.getPaymentState() == PaymentState.PAID) {
-                paidCount++;
-            } else if (inst.getPaymentState() == PaymentState.UNPAID) {
-                remainingCount++;
-                remainingRepayment = remainingRepayment.add(inst.getScheduledAmount());
+        int elapsedCount = 0;
+        int actuallyPaidCount = 0;
+        int overdueCount = 0;
+        LocalDate nextEmiDate = null;
+        LocalDate lastScheduledEmiDate = loan.getEndDate() != null ? loan.getEndDate() :
+                DateUtils.calculateExpectedEndDate(loan.getFirstEmiDate(), loan.getEmiDueDay(), totalEmiCount);
+
+        List<LoanInstallmentResponse> instResponses = new ArrayList<>();
+
+        for (LoanInstallment i : installments) {
+            boolean isDueOnOrBeforeToday = !i.getDueDate().isAfter(today);
+            boolean isPaid = i.getPaymentState() == PaymentState.PAID;
+            boolean isOverdue = !isPaid && i.getDueDate().isBefore(today);
+
+            if (isDueOnOrBeforeToday) {
+                elapsedCount++;
+                if (!isPaid) {
+                    overdueCount++;
+                }
+            } else {
+                if (nextEmiDate == null) {
+                    nextEmiDate = i.getDueDate();
+                }
+            }
+
+            if (isPaid) {
+                actuallyPaidCount++;
+            }
+
+            instResponses.add(new LoanInstallmentResponse(
+                    i.getId(),
+                    i.getLoan().getId(),
+                    i.getInstallmentNumber(),
+                    i.getDueDate(),
+                    i.getScheduledAmount(),
+                    i.getPrincipalComponent(),
+                    i.getInterestComponent(),
+                    i.getPaymentState(),
+                    i.getPaidDate(),
+                    i.getActualPaidAmount(),
+                    i.getNotes(),
+                    i.getVersion(),
+                    isOverdue,
+                    i.getCreatedAt(),
+                    i.getUpdatedAt()
+            ));
+        }
+
+        // If next upcoming installment wasn't in future, check if today is an EMI due date and unpaid
+        if (nextEmiDate == null) {
+            for (LoanInstallment i : installments) {
+                if (i.getDueDate().isEqual(today) && i.getPaymentState() != PaymentState.PAID) {
+                    nextEmiDate = i.getDueDate();
+                    break;
+                }
             }
         }
 
-        BigDecimal estimatedInterest = CurrencyUtils.subtract(remainingRepayment, loan.getCurrentOutstandingPrincipal());
+        // Rule B & C: Remaining EMIs = Total Tenure - Elapsed EMIs
+        int remainingEmiCount = Math.max(0, totalEmiCount - Math.min(totalEmiCount, elapsedCount));
+        if (loan.getStatus() == LoanStatus.CLOSED) {
+            remainingEmiCount = 0;
+        }
+
+        // Rule D: Remaining Loan Amount = Fixed Monthly EMI × Remaining EMI Count
+        BigDecimal remainingLoanAmount = remainingEmiCount > 0 ?
+                loan.getEmiAmount().multiply(BigDecimal.valueOf(remainingEmiCount)) :
+                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+
+        BigDecimal estimatedInterest = CurrencyUtils.subtract(remainingLoanAmount, loan.getCurrentOutstandingPrincipal());
         if (estimatedInterest.compareTo(BigDecimal.ZERO) < 0) {
             estimatedInterest = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
         }
@@ -422,17 +580,23 @@ public class LoanService {
                 loan.getMaskedAccountNumber(),
                 loan.getOriginalPrincipal(),
                 loan.getCurrentOutstandingPrincipal(),
-                CurrencyUtils.format(remainingRepayment),
+                loan.getCurrentOutstandingPrincipal(), // remainingPrincipal
+                CurrencyUtils.format(remainingLoanAmount),
+                CurrencyUtils.format(remainingLoanAmount), // remainingRepayment backward-compatible
                 CurrencyUtils.format(estimatedInterest),
                 loan.getAnnualInterestRate(),
                 loan.getStartDate(),
                 loan.getFirstEmiDate(),
+                lastScheduledEmiDate,
+                nextEmiDate,
                 loan.getEmiDueDay(),
                 loan.getEmiAmount(),
                 loan.getOriginalTenureMonths(),
-                loan.getTotalEmiCount(),
-                paidCount,
-                remainingCount,
+                totalEmiCount,
+                elapsedCount,
+                actuallyPaidCount,
+                remainingEmiCount,
+                overdueCount,
                 loan.getCalculationMode(),
                 loan.isOutstandingPrincipalManualOverride(),
                 loan.getStatus(),

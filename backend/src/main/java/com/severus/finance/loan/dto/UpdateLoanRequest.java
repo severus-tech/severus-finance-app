@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 public record UpdateLoanRequest(
     @NotBlank(message = "Loan name is required")
@@ -20,11 +21,21 @@ public record UpdateLoanRequest(
 
     String maskedAccountNumber,
 
+    BigDecimal originalPrincipal,
+
     BigDecimal currentOutstandingPrincipal,
 
     @NotNull(message = "Annual interest rate is required")
     @Min(value = 0, message = "Interest rate cannot be negative")
     BigDecimal annualInterestRate,
+
+    LocalDate startDate,
+
+    LocalDate firstEmiDate,
+
+    LocalDate endDate,
+
+    Integer originalTenureMonths,
 
     @Min(value = 1, message = "EMI due day must be between 1 and 31")
     @Max(value = 31, message = "EMI due day must be between 1 and 31")

@@ -38,10 +38,12 @@ public class LoanServiceTest {
                 new BigDecimal("9.50"),
                 LocalDate.of(2026, 1, 1),
                 LocalDate.of(2026, 2, 5),
+                null,
                 5,
                 new BigDecimal("10500.00"),
                 60,
                 CalculationMode.REDUCING_BALANCE,
+                false,
                 false,
                 "Test loan"
         );

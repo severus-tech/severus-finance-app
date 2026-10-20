@@ -20,6 +20,7 @@ public record LoanInstallmentResponse(
     BigDecimal actualPaidAmount,
     String notes,
     Long version,
+    boolean overdue,
     Instant createdAt,
     Instant updatedAt
 ) {}

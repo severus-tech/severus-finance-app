@@ -14,8 +14,11 @@ export interface CalculatedLoanMetrics {
   monthlyEmiFreed: number;
   remainingEmis: number;
   paidEmis: number;
+  elapsedEmis: number;
+  overdueEmis: number;
   totalEmis: number;
   annualInterestRate: number;
+  startDate: string;
   nextEmiDate: string;
   lastEmiDate: string;
   progressPercent: number;
@@ -23,69 +26,117 @@ export interface CalculatedLoanMetrics {
   insight: string;
 }
 
+/**
+ * Calculates expected end date from first EMI date (or start date) and tenure in months.
+ */
+export function calculateExpectedEndDate(startDateStr: string, tenureMonths: number, dueDay?: number): string {
+  if (!startDateStr || tenureMonths <= 0) return '';
+  const [yearStr, monthStr, dayStr] = startDateStr.split('-');
+  const startYear = parseInt(yearStr, 10);
+  const startMonth = parseInt(monthStr, 10); // 1-based
+  const day = dueDay ?? parseInt(dayStr, 10);
+
+  // Month index for end date = startMonth - 1 + (tenureMonths - 1)
+  const totalMonths = (startMonth - 1) + (tenureMonths - 1);
+  const endYear = startYear + Math.floor(totalMonths / 12);
+  const endMonth = (totalMonths % 12) + 1;
+
+  const daysInMonth = new Date(endYear, endMonth, 0).getDate();
+  const resolvedDay = Math.min(day, daysInMonth);
+
+  const mm = String(endMonth).padStart(2, '0');
+  const dd = String(resolvedDay).padStart(2, '0');
+  return `${endYear}-${mm}-${dd}`;
+}
+
+/**
+ * Calculates tenure in months from start date and end date.
+ */
+export function calculateTenureMonths(startDateStr: string, endDateStr: string): number {
+  if (!startDateStr || !endDateStr) return 0;
+  const [sYear, sMonth] = startDateStr.split('-').map(Number);
+  const [eYear, eMonth] = endDateStr.split('-').map(Number);
+  if (!sYear || !sMonth || !eYear || !eMonth) return 0;
+
+  const diffMonths = (eYear - sYear) * 12 + (eMonth - sMonth) + 1;
+  return Math.max(1, diffMonths);
+}
+
 export function computeLoanMetrics(loan: Loan): CalculatedLoanMetrics {
   const originalPrincipal = loan.originalPrincipal || 0;
-  const principalRemaining = loan.currentOutstandingPrincipal || 0;
+  const principalRemaining = loan.remainingPrincipal ?? loan.currentOutstandingPrincipal ?? 0;
   const emiAmount = loan.emiAmount || 0;
   const monthlyEmiFreed = emiAmount;
 
-  // Compute remaining & paid EMI counts
-  let remainingEmis = loan.remainingEmiCount;
-  let paidEmis = loan.paidEmiCount;
-  if (loan.installments && loan.installments.length > 0) {
-    const unpaidList = loan.installments.filter((i) => i.paymentState === 'UNPAID');
-    const paidList = loan.installments.filter((i) => i.paymentState === 'PAID');
-    remainingEmis = unpaidList.length;
-    paidEmis = paidList.length;
-  }
-  remainingEmis = remainingEmis ?? Math.max(0, (loan.totalEmiCount || 0) - (loan.paidEmiCount || 0));
-  paidEmis = paidEmis ?? 0;
-  const totalEmis = loan.totalEmiCount || (paidEmis + remainingEmis);
+  // Rule A: Original tenure must remain fixed and NEVER be derived from paid + unpaid
+  const totalEmis = loan.totalEmiCount || loan.originalTenureMonths || (loan.installments ? loan.installments.length : 1);
 
-  // Total Loan Balance: sum of remaining EMIs (EMI × remaining months or scheduled amounts)
-  let totalLoanBalance = loan.remainingRepayment;
-  if (!totalLoanBalance || totalLoanBalance <= 0) {
-    totalLoanBalance = emiAmount * remainingEmis;
-  }
-
-  // Repaid principal and progress %
-  const repaidPrincipal = Math.max(0, originalPrincipal - principalRemaining);
-  const progressPercent =
-    originalPrincipal > 0
-      ? Math.min(100, Math.max(0, Math.round((repaidPrincipal / originalPrincipal) * 100)))
-      : 0;
-
-  // Dates
-  let nextEmiDate = '';
-  let lastEmiDate = '';
   const todayStr = new Date().toISOString().split('T')[0];
 
+  let elapsedEmis = 0;
+  let paidEmis = 0;
+  let overdueEmis = 0;
+  let remainingEmis = 0;
+  let nextEmiDate = '';
+  let lastEmiDate = loan.endDate || '';
+
   if (loan.installments && loan.installments.length > 0) {
-    // Next EMI from current day: first UNPAID installment due today or in future, or nearest unpaid
-    const futureUnpaid = loan.installments.find(
-      (i) => i.paymentState === 'UNPAID' && i.dueDate >= todayStr
-    );
-    const anyUnpaid = loan.installments.find((i) => i.paymentState === 'UNPAID');
-    const nextInst = futureUnpaid || anyUnpaid;
-    if (nextInst) {
-      nextEmiDate = nextInst.dueDate;
+    // Sort installments by number
+    const sorted = [...loan.installments].sort((a, b) => a.installmentNumber - b.installmentNumber);
+
+    for (const inst of sorted) {
+      const isPastOrToday = inst.dueDate <= todayStr;
+      const isPast = inst.dueDate < todayStr;
+      const isPaid = inst.paymentState === 'PAID';
+
+      if (isPastOrToday) {
+        elapsedEmis++;
+      }
+      if (isPaid) {
+        paidEmis++;
+      }
+      if (isPast && !isPaid) {
+        overdueEmis++;
+      }
     }
-    const lastInst = loan.installments[loan.installments.length - 1];
-    if (lastInst) {
-      lastEmiDate = lastInst.dueDate;
+
+    // Elapsed capped at totalEmis
+    elapsedEmis = Math.min(totalEmis, elapsedEmis);
+
+    // Rule B: Remaining = Math.max(0, totalEmis - elapsedEmis). Zero if schedule end has passed.
+    remainingEmis = Math.max(0, totalEmis - elapsedEmis);
+
+    // Rule 5: Next EMI Date should be the next emi from the current day
+    const futureUnpaid = sorted.find((i) => i.paymentState === 'UNPAID' && i.dueDate >= todayStr);
+    if (futureUnpaid) {
+      nextEmiDate = futureUnpaid.dueDate;
     }
+
+    if (!lastEmiDate && sorted.length > 0) {
+      lastEmiDate = sorted[sorted.length - 1].dueDate;
+    }
+  } else {
+    // Fallback if installments array is not loaded
+    paidEmis = loan.paidEmiCount || 0;
+    elapsedEmis = loan.elapsedEmiCount ?? paidEmis;
+    remainingEmis = loan.remainingEmiCount ?? Math.max(0, totalEmis - elapsedEmis);
+    overdueEmis = loan.overdueEmiCount ?? 0;
+    nextEmiDate = loan.nextEmiDate || '';
   }
 
-  // Fallback dates if installments array is absent or empty
-  const isLoanClosed = loan.status === 'CLOSED' || (remainingEmis !== undefined && remainingEmis <= 0);
+  // Fallback for lastEmiDate
+  if (!lastEmiDate && (loan.startDate || loan.firstEmiDate) && totalEmis > 0) {
+    lastEmiDate = calculateExpectedEndDate(loan.firstEmiDate || loan.startDate, totalEmis, loan.emiDueDay);
+  }
 
-  if (!nextEmiDate && !isLoanClosed) {
+  // Fallback for nextEmiDate if loan still has remaining EMIs and nextEmiDate not set
+  if (!nextEmiDate && remainingEmis > 0 && loan.status !== 'CLOSED') {
     const now = new Date();
     const currentDay = now.getDate();
     let targetYear = now.getFullYear();
     let targetMonth = now.getMonth();
 
-    const dueDaySetting = loan.emiDueDay || (loan.startDate ? new Date(loan.startDate).getDate() : 5);
+    const dueDaySetting = loan.emiDueDay || (loan.startDate ? parseInt(loan.startDate.split('-')[2], 10) : 5);
     if (currentDay > dueDaySetting) {
       targetMonth += 1;
     }
@@ -95,15 +146,15 @@ export function computeLoanMetrics(loan: Loan): CalculatedLoanMetrics {
     nextEmiDate = nextDateObj.toISOString().split('T')[0];
   }
 
-  if (!lastEmiDate && (loan.startDate || loan.firstEmiDate) && totalEmis > 0) {
-    try {
-      const d = new Date(loan.startDate || loan.firstEmiDate);
-      d.setMonth(d.getMonth() + totalEmis - 1);
-      lastEmiDate = d.toISOString().split('T')[0];
-    } catch {
-      lastEmiDate = '';
-    }
-  }
+  // Rule D: Remaining Loan Amount = Fixed Monthly EMI × Remaining EMI Count (independent of principal)
+  const totalLoanBalance = remainingEmis > 0 ? emiAmount * remainingEmis : 0;
+
+  // Repaid principal and progress %
+  const repaidPrincipal = Math.max(0, originalPrincipal - principalRemaining);
+  const progressPercent =
+    totalEmis > 0
+      ? Math.min(100, Math.max(0, Math.round((paidEmis / totalEmis) * 100)))
+      : 0;
 
   // Insights
   let insight = `Close this loan to free ₹${Math.round(monthlyEmiFreed).toLocaleString('en-IN')}/month EMI`;
@@ -123,8 +174,11 @@ export function computeLoanMetrics(loan: Loan): CalculatedLoanMetrics {
     monthlyEmiFreed,
     remainingEmis,
     paidEmis,
+    elapsedEmis,
+    overdueEmis,
     totalEmis,
     annualInterestRate: loan.annualInterestRate || 0,
+    startDate: loan.startDate,
     nextEmiDate,
     lastEmiDate,
     progressPercent,

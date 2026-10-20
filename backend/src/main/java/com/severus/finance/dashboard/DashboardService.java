@@ -102,17 +102,27 @@ public class DashboardService {
         for (Loan loan : activeLoans) {
             totalOriginalPrincipal = totalOriginalPrincipal.add(loan.getOriginalPrincipal());
             totalOutstandingPrincipal = totalOutstandingPrincipal.add(loan.getCurrentOutstandingPrincipal());
-            totalMonthlyEmi = totalMonthlyEmi.add(loan.getEmiAmount());
 
             List<LoanInstallment> insts = installmentRepository.findByLoanId(loan.getId());
-            for (LoanInstallment i : insts) {
-                if (i.getPaymentState() == PaymentState.PAID) {
-                    paidEmiCount++;
-                } else if (i.getPaymentState() == PaymentState.UNPAID) {
-                    remainingEmiCount++;
-                    totalRemainingRepayment = totalRemainingRepayment.add(i.getScheduledAmount());
-                }
+            int totalEmiCount = loan.getTotalEmiCount() > 0 ? loan.getTotalEmiCount() :
+                    (loan.getOriginalTenureMonths() > 0 ? loan.getOriginalTenureMonths() : Math.max(1, insts.size()));
+
+            long elapsed = insts.stream()
+                    .filter(i -> !i.getDueDate().isAfter(asOfDate))
+                    .count();
+            int remaining = (int) Math.max(0, totalEmiCount - elapsed);
+
+            int paid = (int) insts.stream()
+                    .filter(i -> i.getPaymentState() == PaymentState.PAID)
+                    .count();
+
+            paidEmiCount += paid;
+            remainingEmiCount += remaining;
+
+            if (remaining > 0) {
+                totalMonthlyEmi = totalMonthlyEmi.add(loan.getEmiAmount());
             }
+            totalRemainingRepayment = totalRemainingRepayment.add(loan.getEmiAmount().multiply(BigDecimal.valueOf(remaining)));
         }
 
         BigDecimal estimatedRemainingInterest = CurrencyUtils.subtract(totalRemainingRepayment, totalOutstandingPrincipal);

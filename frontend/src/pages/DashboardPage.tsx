@@ -230,13 +230,13 @@ export const DashboardPage: React.FC = () => {
 
               <div className="pt-2">
                 <p className="text-xs font-semibold text-slate-300">
-                  Total loan balance:{' '}
+                  Remaining Loan Amount:{' '}
                   <span className="font-extrabold text-amber-300">
                     {formatINR(dashboard.totalRemainingRepayment)}
                   </span>
                 </p>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Sum of remaining EMIs (Principal + Future Interest)
+                  {dashboard.totalRemainingEmiCount} scheduled EMIs commitment
                 </p>
               </div>
 

@@ -12,7 +12,7 @@ import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { formatINR, formatDate, cn } from '@/lib/utils';
-import { computeLoanMetrics } from '@/lib/loanUtils';
+import { computeLoanMetrics, calculateExpectedEndDate, calculateTenureMonths } from '@/lib/loanUtils';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -56,8 +56,13 @@ export const LoanDetailPage: React.FC = () => {
   const [editLender, setEditLender] = useState('');
   const [editLoanType, setEditLoanType] = useState<LoanType>('HOME_LOAN');
   const [editMaskedAccount, setEditMaskedAccount] = useState('');
+  const [editOriginalPrincipal, setEditOriginalPrincipal] = useState('');
   const [editCurrentPrincipal, setEditCurrentPrincipal] = useState('');
   const [editInterestRate, setEditInterestRate] = useState('');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editFirstEmiDate, setEditFirstEmiDate] = useState('');
+  const [editEndDate, setEditEndDate] = useState('');
+  const [editTenureMonths, setEditTenureMonths] = useState('');
   const [editEmiAmount, setEditEmiAmount] = useState('');
   const [editEmiDueDay, setEditEmiDueDay] = useState('5');
   const [editStatus, setEditStatus] = useState<LoanStatus>('ACTIVE');
@@ -130,7 +135,7 @@ export const LoanDetailPage: React.FC = () => {
         keepSameEmiReduceTenure: true,
       });
 
-      toast.success('Prepayment recorded and future schedule recalculated!');
+      toast.success('Prepayment recorded! Remaining principal reduced.');
       setPrepayModalOpen(false);
       setPrepayAmount('');
       queryClient.invalidateQueries({ queryKey: ['loan-detail', id] });
@@ -150,10 +155,24 @@ export const LoanDetailPage: React.FC = () => {
     setEditLender(loan.lenderOrBank);
     setEditLoanType(loan.loanType);
     setEditMaskedAccount(loan.maskedAccountNumber || '');
-    setEditCurrentPrincipal(loan.currentOutstandingPrincipal.toString());
-    setEditInterestRate(loan.annualInterestRate.toString());
-    setEditEmiAmount(loan.emiAmount.toString());
-    setEditEmiDueDay(loan.emiDueDay.toString());
+    setEditOriginalPrincipal(loan.originalPrincipal ? loan.originalPrincipal.toString() : '');
+    setEditCurrentPrincipal(
+      loan.currentOutstandingPrincipal !== undefined
+        ? loan.currentOutstandingPrincipal.toString()
+        : ''
+    );
+    setEditInterestRate(loan.annualInterestRate ? loan.annualInterestRate.toString() : '');
+    const sDate = loan.startDate || '';
+    const fDate = loan.firstEmiDate || sDate;
+    const tenure = loan.totalEmiCount || loan.originalTenureMonths || 1;
+    setEditStartDate(sDate);
+    setEditFirstEmiDate(fDate);
+    setEditTenureMonths(tenure.toString());
+    const expectedEnd =
+      loan.endDate || calculateExpectedEndDate(fDate, tenure, loan.emiDueDay);
+    setEditEndDate(expectedEnd);
+    setEditEmiAmount(loan.emiAmount ? loan.emiAmount.toString() : '');
+    setEditEmiDueDay(loan.emiDueDay ? loan.emiDueDay.toString() : '5');
     setEditStatus(loan.status);
     setEditNotes(loan.notes || '');
     setEditRecalculateSchedule(false);
@@ -171,8 +190,13 @@ export const LoanDetailPage: React.FC = () => {
         lenderOrBank: editLender,
         loanType: editLoanType,
         maskedAccountNumber: editMaskedAccount || undefined,
-        currentOutstandingPrincipal: parseFloat(editCurrentPrincipal),
+        originalPrincipal: editOriginalPrincipal ? parseFloat(editOriginalPrincipal) : undefined,
+        currentOutstandingPrincipal: editCurrentPrincipal ? parseFloat(editCurrentPrincipal) : undefined,
         annualInterestRate: parseFloat(editInterestRate),
+        startDate: editStartDate || undefined,
+        firstEmiDate: editFirstEmiDate || editStartDate || undefined,
+        endDate: editEndDate || undefined,
+        originalTenureMonths: editTenureMonths ? parseInt(editTenureMonths, 10) : undefined,
         emiDueDay: parseInt(editEmiDueDay),
         emiAmount: parseFloat(editEmiAmount),
         status: editStatus,
@@ -339,92 +363,156 @@ export const LoanDetailPage: React.FC = () => {
         </div>
       </Card>
 
-      {/* Comprehensive Loan Statistics Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <Card className="p-4 sm:p-5 border border-slate-800">
-          <span className="text-xs text-slate-400 font-semibold uppercase block mb-1">
-            Principal Remaining
+      {/* 12 Key Loan Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 sm:gap-4">
+        {/* 1. Original Principal Amount */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Original Principal
           </span>
-          <p className="text-xl sm:text-2xl font-black text-purple-300">
+          <p className="text-lg sm:text-xl font-black text-slate-100">
+            {formatINR(metrics.originalPrincipal)}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Initial sanctioned amount</p>
+        </Card>
+
+        {/* 2. Remaining Principal Amount */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Remaining Principal
+          </span>
+          <p className="text-lg sm:text-xl font-black text-purple-300">
             {formatINR(metrics.principalRemaining)}
           </p>
-          <p className="text-[11px] text-slate-400 mt-1 truncate">
-            Original: {formatINR(metrics.originalPrincipal)}
-          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Current principal balance</p>
         </Card>
 
-        <Card className="p-4 sm:p-5 border border-slate-800">
-          <span className="text-xs text-slate-400 font-semibold uppercase block mb-1">
-            Total Loan Balance
-          </span>
-          <p className="text-xl sm:text-2xl font-black text-amber-300">
-            {formatINR(metrics.totalLoanBalance)}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1 truncate">
-            {metrics.remainingEmis} EMIs × {formatINR(metrics.emiAmount)}
-          </p>
-        </Card>
-
-        <Card className="p-4 sm:p-5 border border-slate-800">
-          <span className="text-xs text-slate-400 font-semibold uppercase block mb-1">
+        {/* 3. Monthly EMI Amount */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
             Monthly EMI
           </span>
-          <p className="text-xl sm:text-2xl font-black text-slate-100">
+          <p className="text-lg sm:text-xl font-black text-slate-100">
             {formatINR(metrics.emiAmount)}
           </p>
-          <p className="text-[11px] text-slate-400 mt-1 truncate">
-            Due {loan.emiDueDay}th of month
-          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Due {loan.emiDueDay}th of month</p>
         </Card>
 
-        <Card className="p-4 sm:p-5 border border-slate-800">
-          <span className="text-xs text-slate-400 font-semibold uppercase block mb-1">
-            Interest Rate & Tenure
+        {/* 4. Original Total Tenure */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Original Total Tenure
           </span>
-          <p className="text-xl sm:text-2xl font-black text-emerald-300">
-            {metrics.annualInterestRate}% <span className="text-xs font-normal text-slate-400">p.a.</span>
+          <p className="text-lg sm:text-xl font-black text-emerald-300">
+            {metrics.totalEmis} <span className="text-xs font-normal text-slate-400">Months</span>
           </p>
-          <p className="text-[11px] text-slate-400 mt-1 truncate">
-            {loan.originalTenureMonths} Mo. tenure ({metrics.totalEmis} EMIs)
+          <p className="text-[10px] text-slate-500 mt-0.5">Fixed schedule commitment</p>
+        </Card>
+
+        {/* 5. Elapsed EMI Count */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Elapsed EMIs
+          </span>
+          <p className="text-lg sm:text-xl font-black text-indigo-300">
+            {metrics.elapsedEmis} <span className="text-xs font-normal text-slate-400">/ {metrics.totalEmis}</span>
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Due dates reached so far</p>
+        </Card>
+
+        {/* 6. Actually Paid EMI Count */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Actually Paid EMIs
+          </span>
+          <p className="text-lg sm:text-xl font-black text-emerald-400">
+            {metrics.paidEmis} <span className="text-xs font-normal text-slate-400">EMIs</span>
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Explicitly recorded as paid</p>
+        </Card>
+
+        {/* 7. Remaining EMI Count */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Remaining EMIs
+          </span>
+          <p className="text-lg sm:text-xl font-black text-amber-300">
+            {metrics.remainingEmis} <span className="text-xs font-normal text-slate-400">EMIs</span>
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Total tenure - elapsed EMIs</p>
+        </Card>
+
+        {/* 8. Remaining Loan Amount */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Remaining Loan Amount
+          </span>
+          <p className="text-lg sm:text-xl font-black text-amber-300">
+            {formatINR(metrics.totalLoanBalance)}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">{metrics.remainingEmis} EMIs × {formatINR(metrics.emiAmount)}</p>
+        </Card>
+
+        {/* 9. Loan Start Date */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Loan Start Date
+          </span>
+          <p className="text-base sm:text-lg font-bold text-slate-200">
+            {loan.startDate ? formatDate(loan.startDate) : 'N/A'}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">First EMI date</p>
+        </Card>
+
+        {/* 10. Expected Loan End Date */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Expected End Date
+          </span>
+          <p className="text-base sm:text-lg font-bold text-purple-300">
+            {metrics.lastEmiDate ? formatDate(metrics.lastEmiDate) : 'N/A'}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Final installment due</p>
+        </Card>
+
+        {/* 11. Next EMI Date */}
+        <Card className="p-3.5 sm:p-4 border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Next EMI Date
+          </span>
+          <p className="text-base sm:text-lg font-bold text-slate-100">
+            {metrics.nextEmiDate ? formatDate(metrics.nextEmiDate) : (metrics.remainingEmis === 0 ? 'Fully Elapsed' : 'None upcoming')}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Next from current day</p>
+        </Card>
+
+        {/* 12. Overdue EMI Count */}
+        <Card className={cn(
+          "p-3.5 sm:p-4 border",
+          metrics.overdueEmis > 0 ? "border-rose-800/60 bg-rose-950/20" : "border-slate-800"
+        )}>
+          <span className="text-[11px] text-slate-400 font-semibold uppercase block mb-1">
+            Overdue EMIs
+          </span>
+          <p className={cn(
+            "text-lg sm:text-xl font-black",
+            metrics.overdueEmis > 0 ? "text-rose-400" : "text-emerald-400"
+          )}>
+            {metrics.overdueEmis} <span className="text-xs font-normal text-slate-400">EMIs</span>
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            {metrics.overdueEmis > 0 ? 'Due date passed, unpaid' : 'Zero overdue payments'}
           </p>
         </Card>
-      </div>
-
-      {/* Secondary Metadata Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 p-4 rounded-2xl bg-slate-900/60 border border-purple-900/20 text-xs">
-        <div>
-          <span className="text-slate-400 block mb-0.5">Next EMI Date</span>
-          <span className="font-bold text-slate-200">
-            {metrics.nextEmiDate ? formatDate(metrics.nextEmiDate) : 'Not scheduled'}
-          </span>
-        </div>
-        <div>
-          <span className="text-slate-400 block mb-0.5">Last EMI Date</span>
-          <span className="font-bold text-purple-300">
-            {metrics.lastEmiDate ? formatDate(metrics.lastEmiDate) : 'Not scheduled'}
-          </span>
-        </div>
-        <div>
-          <span className="text-slate-400 block mb-0.5">Paid EMIs</span>
-          <span className="font-bold text-emerald-300">
-            {metrics.paidEmis} EMIs ({formatINR(metrics.paidEmis * metrics.emiAmount)})
-          </span>
-        </div>
-        <div>
-          <span className="text-slate-400 block mb-0.5">Remaining EMIs</span>
-          <span className="font-bold text-amber-300">
-            {metrics.remainingEmis} EMIs
-          </span>
-        </div>
       </div>
 
       {/* Full Amortization Schedule */}
       <Card>
         <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <CardTitle>Amortization Schedule</CardTitle>
+            <CardTitle>EMI Schedule</CardTitle>
             <CardDescription>
-              Reducing balance schedule • {metrics.paidEmis} of {metrics.totalEmis} EMIs paid
+              Fixed schedule • {metrics.paidEmis} of {metrics.totalEmis} EMIs paid ({metrics.remainingEmis} remaining)
             </CardDescription>
           </div>
           <Badge variant="purple" className="self-start sm:self-auto text-xs font-semibold">
@@ -437,113 +525,131 @@ export const LoanDetailPage: React.FC = () => {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-900/90 text-slate-400 font-semibold border-b border-purple-900/20 uppercase tracking-wider">
               <tr>
-                <th className="px-6 py-4">#</th>
+                <th className="px-6 py-4">EMI #</th>
                 <th className="px-6 py-4">Due Date</th>
-                <th className="px-6 py-4">Scheduled EMI</th>
-                <th className="px-6 py-4">Principal Component</th>
-                <th className="px-6 py-4">Interest Component</th>
+                <th className="px-6 py-4">Fixed EMI Amount</th>
                 <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">Actual Payment Date</th>
                 <th className="px-6 py-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-purple-900/10">
-              {loan.installments?.map((inst) => (
-                <tr key={inst.id} className="hover:bg-slate-900/50 transition-colors">
-                  <td className="px-6 py-4 font-bold text-slate-300">{inst.installmentNumber}</td>
-                  <td className="px-6 py-4 text-slate-200 font-medium">{formatDate(inst.dueDate)}</td>
-                  <td className="px-6 py-4 font-extrabold text-slate-100">{formatINR(inst.scheduledAmount)}</td>
-                  <td className="px-6 py-4 text-purple-300 font-semibold">{formatINR(inst.principalComponent)}</td>
-                  <td className="px-6 py-4 text-amber-300 font-semibold">{formatINR(inst.interestComponent)}</td>
-                  <td className="px-6 py-4">
-                    <Badge variant={inst.paymentState === 'PAID' ? 'emerald' : 'amber'}>
-                      {inst.paymentState}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    {inst.paymentState === 'UNPAID' ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleOpenPayModal(inst)}
-                        className="rounded-xl min-h-[36px]"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-400" />
-                        Mark Paid
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleUndoPayment(inst.id)}
-                        className="rounded-xl min-h-[36px] text-slate-400 hover:text-slate-200"
-                      >
-                        <Undo className="w-3.5 h-3.5 mr-1" />
-                        Undo
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {loan.installments?.map((inst) => {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const isPaid = inst.paymentState === 'PAID';
+                const isOverdue = !isPaid && (inst.overdue || inst.dueDate < todayStr);
+
+                return (
+                  <tr key={inst.id} className="hover:bg-slate-900/50 transition-colors">
+                    <td className="px-6 py-4 font-bold text-slate-300">#{inst.installmentNumber}</td>
+                    <td className="px-6 py-4 text-slate-200 font-medium">{formatDate(inst.dueDate)}</td>
+                    <td className="px-6 py-4 font-extrabold text-slate-100">{formatINR(inst.scheduledAmount)}</td>
+                    <td className="px-6 py-4">
+                      {isPaid ? (
+                        <Badge variant="emerald">Paid</Badge>
+                      ) : isOverdue ? (
+                        <Badge variant="rose">Overdue</Badge>
+                      ) : (
+                        <Badge variant="amber">Unpaid</Badge>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-slate-300">
+                      {inst.paidDate ? formatDate(inst.paidDate) : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {isPaid ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleUndoPayment(inst.id)}
+                          className="rounded-xl min-h-[36px] text-slate-400 hover:text-slate-200"
+                        >
+                          <Undo className="w-3.5 h-3.5 mr-1" />
+                          Undo
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleOpenPayModal(inst)}
+                          className="rounded-xl min-h-[36px]"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                          Mark Paid
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </CardContent>
 
         {/* Mobile Responsive List View (sm:hidden - Guaranteed ZERO horizontal scroll on 360px-430px) */}
         <CardContent className="p-3 sm:hidden divide-y divide-purple-900/20 space-y-3">
-          {loan.installments?.map((inst) => (
-            <div key={inst.id} className="pt-3 first:pt-0 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-slate-800 text-[11px] font-extrabold text-purple-300 flex items-center justify-center shrink-0">
-                    {inst.installmentNumber}
-                  </span>
-                  <span className="text-xs font-bold text-slate-200">{formatDate(inst.dueDate)}</span>
-                </div>
-                <Badge variant={inst.paymentState === 'PAID' ? 'emerald' : 'amber'} className="text-[10px]">
-                  {inst.paymentState}
-                </Badge>
-              </div>
+          {loan.installments?.map((inst) => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const isPaid = inst.paymentState === 'PAID';
+            const isOverdue = !isPaid && (inst.overdue || inst.dueDate < todayStr);
 
-              <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-[11px]">
-                <div>
-                  <span className="text-slate-400 block">EMI</span>
-                  <span className="font-extrabold text-slate-100">{formatINR(inst.scheduledAmount)}</span>
+            return (
+              <div key={inst.id} className="pt-3 first:pt-0 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-slate-800 text-[11px] font-extrabold text-purple-300 flex items-center justify-center shrink-0">
+                      {inst.installmentNumber}
+                    </span>
+                    <span className="text-xs font-bold text-slate-200">{formatDate(inst.dueDate)}</span>
+                  </div>
+                  {isPaid ? (
+                    <Badge variant="emerald" className="text-[10px]">Paid</Badge>
+                  ) : isOverdue ? (
+                    <Badge variant="rose" className="text-[10px]">Overdue</Badge>
+                  ) : (
+                    <Badge variant="amber" className="text-[10px]">Unpaid</Badge>
+                  )}
                 </div>
-                <div>
-                  <span className="text-slate-400 block">Principal</span>
-                  <span className="font-semibold text-purple-300">{formatINR(inst.principalComponent)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block">Interest</span>
-                  <span className="font-semibold text-amber-300">{formatINR(inst.interestComponent)}</span>
-                </div>
-              </div>
 
-              <div className="flex justify-end pt-1">
-                {inst.paymentState === 'UNPAID' ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleOpenPayModal(inst)}
-                    className="w-full rounded-xl min-h-[44px] text-xs font-bold"
-                  >
-                    <CheckCircle2 className="w-4 h-4 mr-1 text-emerald-400" />
-                    Mark Installment #{inst.installmentNumber} Paid
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleUndoPayment(inst.id)}
-                    className="w-full rounded-xl min-h-[44px] text-xs text-slate-400 hover:text-slate-200"
-                  >
-                    <Undo className="w-4 h-4 mr-1" />
-                    Undo Payment
-                  </Button>
-                )}
+                <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block">Fixed EMI Amount</span>
+                    <span className="font-extrabold text-slate-100">{formatINR(inst.scheduledAmount)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">Payment Date</span>
+                    <span className="font-semibold text-slate-300">
+                      {inst.paidDate ? formatDate(inst.paidDate) : '-'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  {isPaid ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleUndoPayment(inst.id)}
+                      className="w-full rounded-xl min-h-[44px] text-xs text-slate-400 hover:text-slate-200"
+                    >
+                      <Undo className="w-4 h-4 mr-1" />
+                      Undo Payment
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenPayModal(inst)}
+                      className="w-full rounded-xl min-h-[44px] text-xs font-bold"
+                    >
+                      <CheckCircle2 className="w-4 h-4 mr-1 text-emerald-400" />
+                      Mark EMI #{inst.installmentNumber} Paid
+                    </Button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -585,7 +691,7 @@ export const LoanDetailPage: React.FC = () => {
         isOpen={prepayModalOpen}
         onClose={() => setPrepayModalOpen(false)}
         title="Make Loan Prepayment"
-        description="Prepayments reduce your outstanding principal and recalculate remaining tenure while keeping monthly EMI identical."
+        description="Prepayments reduce your remaining principal balance without shortening your fixed schedule tenure."
       >
         <form onSubmit={handlePrepayment} className="space-y-4">
           <Input
@@ -605,9 +711,9 @@ export const LoanDetailPage: React.FC = () => {
             required
           />
           <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-900/40 text-xs text-purple-300">
-            <p className="font-semibold">Reducing Balance Recalculation:</p>
+            <p className="font-semibold">Principal Balance Reduction:</p>
             <p className="text-[11px] text-slate-300 mt-0.5">
-              The principal component will be deducted immediately, shortening your loan closure date.
+              Prepayments directly pay down your outstanding principal. Your scheduled EMI installments and tenure remain fixed, reducing total interest liability.
             </p>
           </div>
           <div className="flex justify-end gap-3 pt-4 border-t border-purple-900/20">
@@ -626,7 +732,7 @@ export const LoanDetailPage: React.FC = () => {
         isOpen={editModalOpen}
         onClose={() => setEditModalOpen(false)}
         title="Edit Loan Details"
-        description="Update loan parameters, outstanding balance, or recalculate amortization schedule."
+        description="Update loan parameters, tenure, or outstanding balance."
         maxWidth="lg"
       >
         <form onSubmit={handleUpdateLoan} className="space-y-4">
@@ -666,7 +772,15 @@ export const LoanDetailPage: React.FC = () => {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="Original Principal (₹)"
+              type="number"
+              step="0.01"
+              value={editOriginalPrincipal}
+              onChange={(e) => setEditOriginalPrincipal(e.target.value)}
+              required
+            />
             <Input
               label="Current Outstanding Principal (₹)"
               type="number"
@@ -687,6 +801,56 @@ export const LoanDetailPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Input
+              label="Loan Start Date"
+              type="date"
+              value={editStartDate}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEditStartDate(val);
+                setEditFirstEmiDate(val);
+                const tMonths = parseInt(editTenureMonths, 10);
+                const day = parseInt(editEmiDueDay, 10) || 5;
+                if (val && tMonths > 0) {
+                  setEditEndDate(calculateExpectedEndDate(val, tMonths, day));
+                }
+              }}
+              required
+            />
+            <Input
+              label="Tenure (Months)"
+              type="number"
+              min="1"
+              value={editTenureMonths}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEditTenureMonths(val);
+                const tMonths = parseInt(val, 10);
+                const day = parseInt(editEmiDueDay, 10) || 5;
+                if (editStartDate && tMonths > 0) {
+                  setEditEndDate(calculateExpectedEndDate(editStartDate, tMonths, day));
+                }
+              }}
+              required
+            />
+            <Input
+              label="Expected End Date"
+              type="date"
+              value={editEndDate}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEditEndDate(val);
+                if (editStartDate && val) {
+                  const impliedTenure = calculateTenureMonths(editStartDate, val);
+                  if (impliedTenure > 0) {
+                    setEditTenureMonths(impliedTenure.toString());
+                  }
+                }
+              }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
               label="Monthly EMI (₹)"
               type="number"
               step="0.01"
@@ -700,7 +864,15 @@ export const LoanDetailPage: React.FC = () => {
               min="1"
               max="31"
               value={editEmiDueDay}
-              onChange={(e) => setEditEmiDueDay(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEditEmiDueDay(val);
+                const day = parseInt(val, 10);
+                const tMonths = parseInt(editTenureMonths, 10);
+                if (editStartDate && tMonths > 0 && day > 0) {
+                  setEditEndDate(calculateExpectedEndDate(editStartDate, tMonths, day));
+                }
+              }}
               required
             />
             <Select
@@ -724,9 +896,9 @@ export const LoanDetailPage: React.FC = () => {
                 className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-purple-600 focus:ring-purple-500"
               />
               <div>
-                <span className="font-semibold text-slate-200">Recalculate future schedule</span>
+                <span className="font-semibold text-slate-200">Reconcile / recalculate future schedule</span>
                 <p className="text-[11px] text-slate-400">
-                  Regenerate upcoming unpaid installments using updated interest rate or EMI amount.
+                  Safely aligns installments with updated dates or tenure, preserving all past paid records.
                 </p>
               </div>
             </label>

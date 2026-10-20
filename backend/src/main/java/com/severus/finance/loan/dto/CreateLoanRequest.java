@@ -37,6 +37,8 @@ public record CreateLoanRequest(
 
     LocalDate firstEmiDate,
 
+    LocalDate endDate,
+
     @Min(value = 1, message = "EMI due day must be between 1 and 31")
     @Max(value = 31, message = "EMI due day must be between 1 and 31")
     int emiDueDay,
@@ -51,6 +53,8 @@ public record CreateLoanRequest(
     CalculationMode calculationMode,
 
     Boolean manualOverride,
+
+    Boolean autoMarkPastEmisPaid,
 
     String notes
 ) {}
