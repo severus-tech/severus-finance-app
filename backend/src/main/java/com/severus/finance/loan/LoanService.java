@@ -73,13 +73,16 @@ public class LoanService {
         BigDecimal origPrincipal = CurrencyUtils.format(request.originalPrincipal());
         loan.setOriginalPrincipal(origPrincipal);
 
+        boolean manualOverride = request.currentOutstandingPrincipal() != null || Boolean.TRUE.equals(request.manualOverride());
         BigDecimal currentPrincipal = request.currentOutstandingPrincipal() != null ?
                 CurrencyUtils.format(request.currentOutstandingPrincipal()) : origPrincipal;
         loan.setCurrentOutstandingPrincipal(currentPrincipal);
+        loan.setOutstandingPrincipalManualOverride(manualOverride);
 
         loan.setAnnualInterestRate(request.annualInterestRate());
         loan.setStartDate(request.startDate());
-        loan.setFirstEmiDate(request.firstEmiDate());
+        LocalDate firstEmiDate = request.firstEmiDate() != null ? request.firstEmiDate() : request.startDate();
+        loan.setFirstEmiDate(firstEmiDate);
         loan.setEmiDueDay(request.emiDueDay());
 
         BigDecimal emi = CurrencyUtils.format(request.emiAmount());
@@ -88,7 +91,6 @@ public class LoanService {
         loan.setOriginalTenureMonths(request.originalTenureMonths());
         loan.setTotalEmiCount(request.originalTenureMonths());
         loan.setCalculationMode(request.calculationMode() != null ? request.calculationMode() : CalculationMode.REDUCING_BALANCE);
-        loan.setOutstandingPrincipalManualOverride(Boolean.TRUE.equals(request.manualOverride()));
         loan.setStatus(LoanStatus.ACTIVE);
         loan.setNotes(request.notes());
         loan.setCreatedAt(Instant.now());
@@ -96,7 +98,7 @@ public class LoanService {
 
         loanRepository.persist(loan);
 
-        generateSchedule(loan, currentPrincipal, 1, request.firstEmiDate(), request.originalTenureMonths());
+        generateSchedule(loan, origPrincipal, 1, firstEmiDate, request.originalTenureMonths(), true);
 
         return toLoanResponseWithSchedule(loan);
     }
@@ -108,6 +110,9 @@ public class LoanService {
 
         loan.setName(request.name());
         loan.setLenderOrBank(request.lenderOrBank());
+        if (request.loanType() != null) {
+            loan.setLoanType(request.loanType());
+        }
         loan.setMaskedAccountNumber(request.maskedAccountNumber());
         loan.setAnnualInterestRate(request.annualInterestRate());
         loan.setEmiDueDay(request.emiDueDay());
@@ -237,13 +242,7 @@ public class LoanService {
         Loan loan = loanRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ApiException(Response.Status.NOT_FOUND, "LOAN_NOT_FOUND", "Loan not found"));
 
-        List<LoanInstallment> installments = installmentRepository.findByLoanId(id);
-        boolean hasPaidHistory = installments.stream().anyMatch(i -> i.getPaymentState() == PaymentState.PAID);
-        if (hasPaidHistory) {
-            throw new ApiException(Response.Status.BAD_REQUEST, "HAS_PAYMENT_HISTORY",
-                    "Cannot delete loan with paid installments. Please close or pause the loan instead.");
-        }
-
+        installmentRepository.delete("loan.id = ?1", id);
         loanRepository.delete(loan);
     }
 
@@ -291,13 +290,14 @@ public class LoanService {
         );
     }
 
-    private void generateSchedule(Loan loan, BigDecimal principal, int startNumber, LocalDate firstDueDate, int count) {
+    private void generateSchedule(Loan loan, BigDecimal principal, int startNumber, LocalDate firstDueDate, int count, boolean autoMarkPastPaid) {
         BigDecimal monthlyRate = loan.getAnnualInterestRate()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_EVEN)
                 .divide(BigDecimal.valueOf(12), 10, RoundingMode.HALF_EVEN);
 
         BigDecimal currentPrincipal = principal;
         LocalDate currentDueDate = firstDueDate;
+        LocalDate today = LocalDate.now();
 
         for (int i = 0; i < count; i++) {
             int installmentNumber = startNumber + i;
@@ -324,7 +324,23 @@ public class LoanService {
             installment.setScheduledAmount(scheduledAmount);
             installment.setPrincipalComponent(principalComponent);
             installment.setInterestComponent(interestComponent);
-            installment.setPaymentState(PaymentState.UNPAID);
+
+            if (autoMarkPastPaid && currentDueDate.isBefore(today)) {
+                installment.setPaymentState(PaymentState.PAID);
+                installment.setPaidDate(currentDueDate);
+                installment.setActualPaidAmount(scheduledAmount);
+
+                if (!loan.isOutstandingPrincipalManualOverride()) {
+                    BigDecimal updatedPrincipal = CurrencyUtils.subtract(loan.getCurrentOutstandingPrincipal(), principalComponent);
+                    if (updatedPrincipal.compareTo(BigDecimal.ZERO) < 0) {
+                        updatedPrincipal = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN);
+                    }
+                    loan.setCurrentOutstandingPrincipal(updatedPrincipal);
+                }
+            } else {
+                installment.setPaymentState(PaymentState.UNPAID);
+            }
+
             installment.setCreatedAt(Instant.now());
             installment.setUpdatedAt(Instant.now());
 
@@ -337,6 +353,11 @@ public class LoanService {
             if (currentPrincipal.compareTo(BigDecimal.ZERO) <= 0) {
                 break;
             }
+        }
+
+        if (loan.getCurrentOutstandingPrincipal().compareTo(BigDecimal.ZERO) <= 0) {
+            loan.setCurrentOutstandingPrincipal(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_EVEN));
+            loan.setStatus(LoanStatus.CLOSED);
         }
     }
 
@@ -352,7 +373,7 @@ public class LoanService {
         LocalDate firstDueDate = unpaid.getFirst().getDueDate();
         int remainingCount = unpaid.size();
 
-        generateSchedule(loan, loan.getCurrentOutstandingPrincipal(), startNumber, firstDueDate, remainingCount);
+        generateSchedule(loan, loan.getCurrentOutstandingPrincipal(), startNumber, firstDueDate, remainingCount, false);
     }
 
     public LoanResponse toLoanResponseWithSchedule(Loan loan) {

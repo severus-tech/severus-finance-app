@@ -58,8 +58,15 @@ export function computeLoanMetrics(loan: Loan): CalculatedLoanMetrics {
   // Dates
   let nextEmiDate = '';
   let lastEmiDate = '';
+  const todayStr = new Date().toISOString().split('T')[0];
+
   if (loan.installments && loan.installments.length > 0) {
-    const nextInst = loan.installments.find((i) => i.paymentState === 'UNPAID');
+    // Next EMI from current day: first UNPAID installment due today or in future, or nearest unpaid
+    const futureUnpaid = loan.installments.find(
+      (i) => i.paymentState === 'UNPAID' && i.dueDate >= todayStr
+    );
+    const anyUnpaid = loan.installments.find((i) => i.paymentState === 'UNPAID');
+    const nextInst = futureUnpaid || anyUnpaid;
     if (nextInst) {
       nextEmiDate = nextInst.dueDate;
     }
@@ -70,18 +77,32 @@ export function computeLoanMetrics(loan: Loan): CalculatedLoanMetrics {
   }
 
   // Fallback dates if installments array is absent or empty
-  if (!lastEmiDate && loan.firstEmiDate && totalEmis > 0) {
+  const isLoanClosed = loan.status === 'CLOSED' || (remainingEmis !== undefined && remainingEmis <= 0);
+
+  if (!nextEmiDate && !isLoanClosed) {
+    const now = new Date();
+    const currentDay = now.getDate();
+    let targetYear = now.getFullYear();
+    let targetMonth = now.getMonth();
+
+    const dueDaySetting = loan.emiDueDay || (loan.startDate ? new Date(loan.startDate).getDate() : 5);
+    if (currentDay > dueDaySetting) {
+      targetMonth += 1;
+    }
+    const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const resolvedDay = Math.min(dueDaySetting, daysInTargetMonth);
+    const nextDateObj = new Date(targetYear, targetMonth, resolvedDay);
+    nextEmiDate = nextDateObj.toISOString().split('T')[0];
+  }
+
+  if (!lastEmiDate && (loan.startDate || loan.firstEmiDate) && totalEmis > 0) {
     try {
-      const d = new Date(loan.firstEmiDate);
+      const d = new Date(loan.startDate || loan.firstEmiDate);
       d.setMonth(d.getMonth() + totalEmis - 1);
       lastEmiDate = d.toISOString().split('T')[0];
     } catch {
       lastEmiDate = '';
     }
-  }
-
-  if (!nextEmiDate && loan.firstEmiDate) {
-    nextEmiDate = loan.firstEmiDate;
   }
 
   // Insights

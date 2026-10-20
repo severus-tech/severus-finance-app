@@ -35,7 +35,6 @@ public record CreateLoanRequest(
     @NotNull(message = "Start date is required")
     LocalDate startDate,
 
-    @NotNull(message = "First EMI date is required")
     LocalDate firstEmiDate,
 
     @Min(value = 1, message = "EMI due day must be between 1 and 31")

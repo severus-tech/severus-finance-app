@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { Loan, LoanInstallment } from '@/types';
+import { Loan, LoanInstallment, LoanType, LoanStatus } from '@/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Dialog } from '@/components/ui/Dialog';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { formatINR, formatDate, cn } from '@/lib/utils';
@@ -27,6 +28,7 @@ import {
   FileText,
   Clock,
   Trash2,
+  Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -47,6 +49,21 @@ export const LoanDetailPage: React.FC = () => {
   const [prepayLoading, setPrepayLoading] = useState(false);
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  // Edit Loan Modal State
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editLender, setEditLender] = useState('');
+  const [editLoanType, setEditLoanType] = useState<LoanType>('HOME_LOAN');
+  const [editMaskedAccount, setEditMaskedAccount] = useState('');
+  const [editCurrentPrincipal, setEditCurrentPrincipal] = useState('');
+  const [editInterestRate, setEditInterestRate] = useState('');
+  const [editEmiAmount, setEditEmiAmount] = useState('');
+  const [editEmiDueDay, setEditEmiDueDay] = useState('5');
+  const [editStatus, setEditStatus] = useState<LoanStatus>('ACTIVE');
+  const [editNotes, setEditNotes] = useState('');
+  const [editRecalculateSchedule, setEditRecalculateSchedule] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
 
   const { data: loan, isLoading, error } = useQuery<Loan>({
     queryKey: ['loan-detail', id],
@@ -127,11 +144,66 @@ export const LoanDetailPage: React.FC = () => {
     }
   };
 
+  const handleOpenEditModal = () => {
+    if (!loan) return;
+    setEditName(loan.name);
+    setEditLender(loan.lenderOrBank);
+    setEditLoanType(loan.loanType);
+    setEditMaskedAccount(loan.maskedAccountNumber || '');
+    setEditCurrentPrincipal(loan.currentOutstandingPrincipal.toString());
+    setEditInterestRate(loan.annualInterestRate.toString());
+    setEditEmiAmount(loan.emiAmount.toString());
+    setEditEmiDueDay(loan.emiDueDay.toString());
+    setEditStatus(loan.status);
+    setEditNotes(loan.notes || '');
+    setEditRecalculateSchedule(false);
+    setEditModalOpen(true);
+  };
+
+  const handleUpdateLoan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    setEditLoading(true);
+
+    try {
+      await api.put(`/api/v1/loans/${id}`, {
+        name: editName,
+        lenderOrBank: editLender,
+        loanType: editLoanType,
+        maskedAccountNumber: editMaskedAccount || undefined,
+        currentOutstandingPrincipal: parseFloat(editCurrentPrincipal),
+        annualInterestRate: parseFloat(editInterestRate),
+        emiDueDay: parseInt(editEmiDueDay),
+        emiAmount: parseFloat(editEmiAmount),
+        status: editStatus,
+        manualOverride: true,
+        recalculateFutureSchedule: editRecalculateSchedule,
+        notes: editNotes || undefined,
+      });
+
+      toast.success('Loan updated successfully!');
+      setEditModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['loan-detail', id] });
+      queryClient.invalidateQueries({ queryKey: ['loans'] });
+      queryClient.invalidateQueries({ queryKey: ['loans-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-active-loans'] });
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Failed to update loan');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
   const handleDeleteLoan = async () => {
     if (!id) return;
     try {
       await api.delete(`/api/v1/loans/${id}`);
       toast.success('Loan deleted');
+      queryClient.invalidateQueries({ queryKey: ['loans'] });
+      queryClient.invalidateQueries({ queryKey: ['loans-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-active-loans'] });
       navigate('/loans');
     } catch (err: any) {
       toast.error(err?.response?.data?.message || 'Failed to delete loan');
@@ -185,6 +257,15 @@ export const LoanDetailPage: React.FC = () => {
           <Button
             variant="outline"
             size="sm"
+            onClick={handleOpenEditModal}
+            className="rounded-xl min-h-[42px] border-slate-700 hover:bg-slate-800 text-slate-200"
+          >
+            <Pencil className="w-4 h-4 mr-1.5" />
+            Edit Loan
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setPrepayModalOpen(true)}
             className="rounded-xl min-h-[42px] border-purple-500/40 hover:bg-purple-950/40 text-purple-300"
           >
@@ -196,6 +277,8 @@ export const LoanDetailPage: React.FC = () => {
             size="sm"
             onClick={() => setDeleteConfirmOpen(true)}
             className="rounded-xl min-h-[42px]"
+            title="Delete Loan"
+            aria-label="Delete Loan"
           >
             <Trash2 className="w-4 h-4" />
           </Button>
@@ -538,13 +621,142 @@ export const LoanDetailPage: React.FC = () => {
         </form>
       </Dialog>
 
+      {/* Edit Loan Dialog Modal */}
+      <Dialog
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        title="Edit Loan Details"
+        description="Update loan parameters, outstanding balance, or recalculate amortization schedule."
+        maxWidth="lg"
+      >
+        <form onSubmit={handleUpdateLoan} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="Loan Name"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              required
+            />
+            <Input
+              label="Lender / Bank"
+              value={editLender}
+              onChange={(e) => setEditLender(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select
+              label="Loan Type"
+              value={editLoanType}
+              onChange={(e) => setEditLoanType(e.target.value as LoanType)}
+              options={[
+                { value: 'HOME_LOAN', label: 'Home Loan' },
+                { value: 'PERSONAL_LOAN', label: 'Personal Loan' },
+                { value: 'CAR_LOAN', label: 'Car Loan' },
+                { value: 'EDUCATION_LOAN', label: 'Education Loan' },
+                { value: 'OTHER', label: 'Other Loan' },
+              ]}
+            />
+            <Input
+              label="Account Number (Last 4 digits)"
+              value={editMaskedAccount}
+              onChange={(e) => setEditMaskedAccount(e.target.value)}
+              placeholder="e.g. 4321"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="Current Outstanding Principal (₹)"
+              type="number"
+              step="0.01"
+              value={editCurrentPrincipal}
+              onChange={(e) => setEditCurrentPrincipal(e.target.value)}
+              required
+            />
+            <Input
+              label="Annual Interest Rate (% p.a.)"
+              type="number"
+              step="0.01"
+              value={editInterestRate}
+              onChange={(e) => setEditInterestRate(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="Monthly EMI (₹)"
+              type="number"
+              step="0.01"
+              value={editEmiAmount}
+              onChange={(e) => setEditEmiAmount(e.target.value)}
+              required
+            />
+            <Input
+              label="EMI Due Day of Month"
+              type="number"
+              min="1"
+              max="31"
+              value={editEmiDueDay}
+              onChange={(e) => setEditEmiDueDay(e.target.value)}
+              required
+            />
+            <Select
+              label="Loan Status"
+              value={editStatus}
+              onChange={(e) => setEditStatus(e.target.value as LoanStatus)}
+              options={[
+                { value: 'ACTIVE', label: 'Active' },
+                { value: 'CLOSED', label: 'Closed' },
+                { value: 'PAUSED', label: 'Paused' },
+              ]}
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-900 border border-purple-900/40 text-xs">
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={editRecalculateSchedule}
+                onChange={(e) => setEditRecalculateSchedule(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-purple-600 focus:ring-purple-500"
+              />
+              <div>
+                <span className="font-semibold text-slate-200">Recalculate future schedule</span>
+                <p className="text-[11px] text-slate-400">
+                  Regenerate upcoming unpaid installments using updated interest rate or EMI amount.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <Input
+            label="Notes (Optional)"
+            value={editNotes}
+            onChange={(e) => setEditNotes(e.target.value)}
+            placeholder="Add any reminders or loan notes..."
+          />
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-purple-900/20">
+            <Button variant="ghost" type="button" onClick={() => setEditModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" type="submit" disabled={editLoading}>
+              {editLoading ? 'Saving Changes...' : 'Save Changes'}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
       {/* Delete Loan Confirmation Modal */}
       <ConfirmModal
         isOpen={deleteConfirmOpen}
         onClose={() => setDeleteConfirmOpen(false)}
         onConfirm={handleDeleteLoan}
         title="Delete Loan?"
-        message="Are you sure you want to delete this loan? Loans with existing payment history cannot be deleted."
+        message="Are you sure you want to delete this loan? This will permanently remove the loan and its entire amortization schedule."
         confirmText="Delete Loan"
         variant="danger"
       />

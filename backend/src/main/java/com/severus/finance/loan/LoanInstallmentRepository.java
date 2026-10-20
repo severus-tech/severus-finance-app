@@ -31,4 +31,8 @@ public class LoanInstallmentRepository implements PanacheRepositoryBase<LoanInst
     public long deleteUnpaidFutureInstallments(UUID loanId) {
         return delete("loan.id = ?1 and paymentState = 'UNPAID'", loanId);
     }
+
+    public long deleteByLoanId(UUID loanId) {
+        return delete("loan.id = ?1", loanId);
+    }
 }

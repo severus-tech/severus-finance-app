@@ -1,6 +1,7 @@
 package com.severus.finance.loan.dto;
 
 import com.severus.finance.loan.enums.LoanStatus;
+import com.severus.finance.loan.enums.LoanType;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -14,6 +15,8 @@ public record UpdateLoanRequest(
 
     @NotBlank(message = "Lender or bank name is required")
     String lenderOrBank,
+
+    LoanType loanType,
 
     String maskedAccountNumber,
 

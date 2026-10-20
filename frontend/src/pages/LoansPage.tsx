@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { formatINR, formatDate, cn } from '@/lib/utils';
 import { computeLoanMetrics } from '@/lib/loanUtils';
 import {
@@ -22,6 +23,7 @@ import {
   Calendar,
   FileText,
   TrendingUp,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -31,6 +33,7 @@ export const LoansPage: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('ACTIVE');
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [deleteLoanId, setDeleteLoanId] = useState<string | null>(null);
 
   // Form State
   const [name, setName] = useState('');
@@ -41,8 +44,7 @@ export const LoansPage: React.FC = () => {
   const [currentPrincipal, setCurrentPrincipal] = useState('');
   const [interestRate, setInterestRate] = useState('9.5');
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [firstEmiDate, setFirstEmiDate] = useState(new Date().toISOString().split('T')[0]);
-  const [emiDueDay, setEmiDueDay] = useState('5');
+  const [emiDueDay, setEmiDueDay] = useState(new Date().getDate().toString());
   const [emiAmount, setEmiAmount] = useState('');
   const [tenureMonths, setTenureMonths] = useState('60');
 
@@ -74,10 +76,10 @@ export const LoansPage: React.FC = () => {
         loanType,
         maskedAccountNumber: maskedAccount,
         originalPrincipal: parseFloat(origPrincipal),
-        currentOutstandingPrincipal: currentPrincipal ? parseFloat(currentPrincipal) : parseFloat(origPrincipal),
+        currentOutstandingPrincipal: currentPrincipal ? parseFloat(currentPrincipal) : undefined,
         annualInterestRate: parseFloat(interestRate),
         startDate,
-        firstEmiDate,
+        firstEmiDate: startDate,
         emiDueDay: parseInt(emiDueDay),
         emiAmount: parseFloat(emiAmount),
         originalTenureMonths: parseInt(tenureMonths),
@@ -215,8 +217,22 @@ export const LoansPage: React.FC = () => {
                       </p>
                     </div>
 
-                    <div className="p-3 rounded-2xl bg-purple-950/70 border border-purple-800/40 text-purple-300 shrink-0">
-                      <Landmark className="w-5 h-5 sm:w-6 sm:h-6" />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteLoanId(loan.id);
+                        }}
+                        className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                        title="Delete loan"
+                        aria-label="Delete loan"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <div className="p-3 rounded-2xl bg-purple-950/70 border border-purple-800/40 text-purple-300">
+                        <Landmark className="w-5 h-5 sm:w-6 sm:h-6" />
+                      </div>
                     </div>
                   </div>
 
@@ -347,9 +363,23 @@ export const LoansPage: React.FC = () => {
             <Input label="Tenure (Months)" type="number" value={tenureMonths} onChange={(e) => setTenureMonths(e.target.value)} required />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Input label="Loan Start Date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
-            <Input label="First EMI Date" type="date" value={firstEmiDate} onChange={(e) => setFirstEmiDate(e.target.value)} required />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="Loan Start Date"
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                const val = e.target.value;
+                setStartDate(val);
+                if (val) {
+                  const day = new Date(val).getDate();
+                  if (!isNaN(day)) {
+                    setEmiDueDay(day.toString());
+                  }
+                }
+              }}
+              required
+            />
             <Input label="EMI Due Day of Month" type="number" min="1" max="31" value={emiDueDay} onChange={(e) => setEmiDueDay(e.target.value)} required />
           </div>
 
@@ -363,6 +393,30 @@ export const LoansPage: React.FC = () => {
           </div>
         </form>
       </Dialog>
+
+      <ConfirmModal
+        isOpen={!!deleteLoanId}
+        onClose={() => setDeleteLoanId(null)}
+        onConfirm={async () => {
+          if (!deleteLoanId) return;
+          try {
+            await api.delete(`/api/v1/loans/${deleteLoanId}`);
+            toast.success('Loan deleted');
+            queryClient.invalidateQueries({ queryKey: ['loans'] });
+            queryClient.invalidateQueries({ queryKey: ['loans-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard-active-loans'] });
+          } catch (err: any) {
+            toast.error(err?.response?.data?.message || 'Failed to delete loan');
+          } finally {
+            setDeleteLoanId(null);
+          }
+        }}
+        title="Delete Loan"
+        message="Are you sure you want to delete this loan? This will delete all its amortization installments permanently."
+        confirmText="Delete Loan"
+        variant="danger"
+      />
     </div>
   );
 };
