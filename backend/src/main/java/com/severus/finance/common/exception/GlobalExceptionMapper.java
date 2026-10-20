@@ -5,6 +5,7 @@ import jakarta.annotation.Priority;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.ws.rs.Priorities;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
@@ -73,6 +74,39 @@ public class GlobalExceptionMapper implements ExceptionMapper<Throwable> {
                 correlationId
             );
             return Response.status(Response.Status.CONFLICT).entity(errorResponse).build();
+        }
+
+        if (exception instanceof WebApplicationException webAppEx) {
+            int status = webAppEx.getResponse() != null ? webAppEx.getResponse().getStatus() : 500;
+            String message = webAppEx.getMessage();
+            if (status == Response.Status.NOT_FOUND.getStatusCode()) {
+                LOG.debugf("Resource not found: %s", path);
+                ErrorResponse errorResponse = ErrorResponse.of(
+                    Response.Status.NOT_FOUND.getStatusCode(),
+                    "NOT_FOUND",
+                    "Resource not found: " + path,
+                    path,
+                    null,
+                    correlationId
+                );
+                return Response.status(Response.Status.NOT_FOUND).entity(errorResponse).build();
+            }
+
+            if (status < 500) {
+                LOG.warnf("Web application exception [%d]: %s (path: %s)", status, message, path);
+            } else {
+                LOG.errorf(webAppEx, "Web application exception [%d] (path: %s): %s", status, path, message);
+            }
+
+            ErrorResponse errorResponse = ErrorResponse.of(
+                status,
+                "HTTP_" + status,
+                message != null ? message : "HTTP error " + status,
+                path,
+                null,
+                correlationId
+            );
+            return Response.status(status).entity(errorResponse).build();
         }
 
         LOG.errorf(exception, "Unhandled Exception [ID: %s]: %s (path: %s)", correlationId, exception.getMessage(), path);

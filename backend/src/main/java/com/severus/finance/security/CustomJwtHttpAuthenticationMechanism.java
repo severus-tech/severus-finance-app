@@ -30,7 +30,7 @@ public class CustomJwtHttpAuthenticationMechanism implements HttpAuthenticationM
     public Uni<SecurityIdentity> authenticate(RoutingContext context, IdentityProviderManager identityProviderManager) {
         String path = context.request().path();
         // Allow public endpoints to pass through without authentication check
-        if (path.startsWith("/q/") || path.equals("/api/v1/auth/login") || path.equals("/api/v1/auth/refresh")) {
+        if (path.equals("/") || path.equals("/health") || path.startsWith("/q/") || path.equals("/api/v1/auth/login") || path.equals("/api/v1/auth/refresh")) {
             return Uni.createFrom().nullItem();
         }
 

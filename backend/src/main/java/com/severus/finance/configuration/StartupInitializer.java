@@ -9,6 +9,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.UUID;
@@ -26,6 +27,10 @@ public class StartupInitializer {
 
     @Inject
     AppConfig appConfig;
+
+    @Inject
+    @ConfigProperty(name = "quarkus.http.port", defaultValue = "8080")
+    int httpPort;
 
     @Transactional
     public void onStartup(@Observes StartupEvent ev) {
@@ -57,12 +62,12 @@ public class StartupInitializer {
             }
         );
 
-        LOG.info("\n=================================================\n" +
+        LOG.infof("\n=================================================\n" +
                  "✅ Severus Finance Backend is RUNNING\n" +
-                 "API:      http://localhost:8080\n" +
-                 "Health:   http://localhost:8080/q/health\n" +
+                 "API:      http://localhost:%d\n" +
+                 "Health:   http://localhost:%d/q/health\n" +
                  "Database: PostgreSQL connected\n" +
                  "Frontend: http://localhost:5173\n" +
-                 "=================================================");
+                 "=================================================", httpPort, httpPort);
     }
 }
