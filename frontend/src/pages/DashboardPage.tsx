@@ -13,6 +13,7 @@ import {
   computeLoanMetrics,
   sortLoansByFocus,
   LoanSortOption,
+  downloadLoanPortfolioPdf,
 } from '@/lib/loanUtils';
 import {
   Wallet,
@@ -29,6 +30,7 @@ import {
   ChevronRight,
   ShieldCheck,
   CheckCircle2,
+  FileDown,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -57,6 +59,7 @@ export const DashboardPage: React.FC = () => {
   const [asOfDate, setAsOfDate] = useState<string>('');
   const [emiSheetOpen, setEmiSheetOpen] = useState(false);
   const [loanSortOption, setLoanSortOption] = useState<LoanSortOption>('SMALLEST_BALANCE');
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // Query Dashboard Summary
   const { data: dashboard, isLoading: isDashboardLoading, error: dashboardError } = useQuery<DashboardSummary>({
@@ -84,6 +87,20 @@ export const DashboardPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     } catch {
       toast.error('Failed to update task');
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    try {
+      toast.info('Generating complete loan portfolio PDF...');
+      await downloadLoanPortfolioPdf();
+      toast.success('Loan summary PDF downloaded successfully!');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Failed to download loan summary PDF');
+    } finally {
+      setIsDownloadingPdf(false);
     }
   };
 
@@ -163,22 +180,35 @@ export const DashboardPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 bg-slate-950/70 p-2.5 rounded-2xl border border-slate-800 self-start md:self-auto">
-          <Calendar className="w-4 h-4 text-purple-400 shrink-0" />
-          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">
-            As Of Date:
-          </label>
-          <input
-            type="date"
-            value={asOfDate || dashboard.asOfDate}
-            onChange={(e) => setAsOfDate(e.target.value)}
-            className="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-purple-500"
-          />
-          {asOfDate && (
-            <Button variant="ghost" size="sm" onClick={() => setAsOfDate('')}>
-              Reset
-            </Button>
-          )}
+        <div className="flex flex-wrap items-center gap-2.5 self-start md:self-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            className="rounded-xl border-purple-500/40 hover:bg-purple-950/40 text-purple-200 min-h-[38px]"
+          >
+            <FileDown className="w-4 h-4 mr-1.5" />
+            {isDownloadingPdf ? 'Exporting...' : 'Export Loan PDF'}
+          </Button>
+
+          <div className="flex items-center gap-2 bg-slate-950/70 p-2 rounded-2xl border border-slate-800">
+            <Calendar className="w-4 h-4 text-purple-400 shrink-0" />
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">
+              As Of Date:
+            </label>
+            <input
+              type="date"
+              value={asOfDate || dashboard.asOfDate}
+              onChange={(e) => setAsOfDate(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-xl px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+            {asOfDate && (
+              <Button variant="ghost" size="sm" onClick={() => setAsOfDate('')}>
+                Reset
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 

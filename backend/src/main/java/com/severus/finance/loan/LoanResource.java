@@ -24,6 +24,9 @@ public class LoanResource {
     LoanService loanService;
 
     @Inject
+    LoanPdfExportService loanPdfExportService;
+
+    @Inject
     JsonWebToken jwt;
 
     @GET
@@ -39,6 +42,21 @@ public class LoanResource {
         UUID userId = SecurityUtils.getUserId(jwt);
         LoanSummaryResponse summary = loanService.getLoanSummary(userId);
         return Response.ok(summary).build();
+    }
+
+    @GET
+    @Path("/export/pdf")
+    @Produces("application/pdf")
+    public Response exportLoanPortfolioPdf() {
+        UUID userId = SecurityUtils.getUserId(jwt);
+        byte[] pdfBytes = loanPdfExportService.generateLoanPortfolioPdf(userId);
+        String filename = "Finance_Loan_Portfolio_" + com.severus.finance.common.util.DateUtils.todayInKolkata() + ".pdf";
+        return Response.ok(pdfBytes, "application/pdf")
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                .header("Pragma", "no-cache")
+                .header("Expires", "0")
+                .build();
     }
 
     @GET

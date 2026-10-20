@@ -1,4 +1,5 @@
 import { Loan } from '@/types';
+import { api } from '@/lib/api';
 
 export type LoanSortOption =
   | 'SMALLEST_BALANCE'
@@ -222,4 +223,32 @@ export function sortLoansByFocus(loans: Loan[], sortBy: LoanSortOption): Loan[] 
     default:
       return list;
   }
+}
+
+/**
+ * Downloads the authoritative Loan Portfolio PDF report from the backend.
+ */
+export async function downloadLoanPortfolioPdf(): Promise<void> {
+  const response = await api.get('/api/v1/loans/export/pdf', {
+    responseType: 'blob',
+  });
+
+  let filename = `Finance_Loan_Portfolio_${new Date().toISOString().split('T')[0]}.pdf`;
+  const disposition = response.headers['content-disposition'];
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    if (match && match[1]) {
+      filename = match[1];
+    }
+  }
+
+  const blob = new Blob([response.data], { type: 'application/pdf' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.parentNode?.removeChild(link);
+  window.URL.revokeObjectURL(url);
 }

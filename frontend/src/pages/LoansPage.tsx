@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { formatINR, formatDate, cn } from '@/lib/utils';
-import { computeLoanMetrics, calculateExpectedEndDate, calculateTenureMonths } from '@/lib/loanUtils';
+import { computeLoanMetrics, calculateExpectedEndDate, calculateTenureMonths, downloadLoanPortfolioPdf } from '@/lib/loanUtils';
 import {
   Landmark,
   Plus,
@@ -24,6 +24,7 @@ import {
   FileText,
   TrendingUp,
   Trash2,
+  FileDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -33,6 +34,7 @@ export const LoansPage: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('ACTIVE');
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [deleteLoanId, setDeleteLoanId] = useState<string | null>(null);
 
   // Form State
@@ -112,6 +114,20 @@ export const LoansPage: React.FC = () => {
     }
   };
 
+  const handleDownloadPdf = async () => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    try {
+      toast.info('Generating complete loan portfolio PDF...');
+      await downloadLoanPortfolioPdf();
+      toast.success('Loan summary PDF downloaded successfully!');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Failed to download loan summary PDF');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-300">
       {/* Page Header */}
@@ -125,14 +141,26 @@ export const LoansPage: React.FC = () => {
           </p>
         </div>
 
-        <Button
-          variant="primary"
-          onClick={() => setIsAddOpen(true)}
-          className="rounded-xl shadow-lg shadow-purple-950/40 self-start sm:self-auto min-h-[42px]"
-        >
-          <Plus className="w-4 h-4 mr-1.5" />
-          Add New Loan
-        </Button>
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+          <Button
+            variant="outline"
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            className="rounded-xl border-purple-500/40 hover:bg-purple-950/40 text-purple-200 min-h-[42px]"
+          >
+            <FileDown className="w-4 h-4 mr-1.5" />
+            {isDownloadingPdf ? 'Generating PDF...' : 'Download Loan Summary PDF'}
+          </Button>
+
+          <Button
+            variant="primary"
+            onClick={() => setIsAddOpen(true)}
+            className="rounded-xl shadow-lg shadow-purple-950/40 min-h-[42px]"
+          >
+            <Plus className="w-4 h-4 mr-1.5" />
+            Add New Loan
+          </Button>
+        </div>
       </div>
 
       {/* Summary KPI Cards */}
